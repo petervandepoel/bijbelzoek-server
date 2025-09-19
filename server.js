@@ -77,12 +77,6 @@ await mongoose.connect(uri, { dbName });
 const total = await mongoose.connection.db.collection("verses").estimatedDocumentCount();
 console.log("DBG verses count:", total);
 
-// CORS netjes trimmen
-const allowed = (process.env.CORS_ORIGIN ?? "")
-  .split(",").map(s => s.trim()).filter(Boolean);
-app.use(cors({ origin: allowed.length ? allowed : undefined, credentials: true }));
-
-
 mongoose
   .connect(uri)
   .then(() => console.log("✅ MongoDB verbonden"))
