@@ -3,22 +3,36 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "main": "server.js",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
-    "seed": "node scripts/seed.js"
+    "dev": "nodemon server.js",
+    "seed": "node scripts/seed.js",
+    "seed:hsv": "node scripts/seedBible.js"
   },
   "dependencies": {
+    "canvas": "^3.2.0",
+    "chart.js": "^4.5.0",
+    "chartjs-node-canvas": "^5.0.0",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
+    "docx": "^8.5.0",
     "dotenv": "^17.2.2",
     "express": "^4.21.2",
-    "helmet": "^7.2.0",
+    "helmet": "^8.1.0",
+    "markdown": "^0.5.0",
     "markdown-it": "^14.1.0",
     "mongoose": "^8.18.1",
-    "morgan": "^1.10.1"
+    "morgan": "^1.10.1",
+    "openai": "^5.21.0",
+    "pdf-lib": "^1.17.1",
+    "pdfkit": "^0.15.0",
+    "puppeteer": "^24.22.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   }
 }
