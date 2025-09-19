@@ -1,133 +1,192 @@
-// server/server.js
+// server.js
 import express from "express";
-import mongoose from "mongoose";
-import dotenv from "dotenv";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import cors from "cors";
 import helmet from "helmet";
-import morgan from "morgan";
+import compression from "compression";
+import cors from "cors";
+import mongoose from "mongoose";
 
-// ——— Locatie .env (naast dit bestand). Pas dit aan als jouw .env elders staat.
-const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: join(__dirname, ".env") });
-// Staat .env één map hoger? Gebruik dan bijvoorbeeld:
-// dotenv.config({ path: join(__dirname, "../.env") });
+// ---------- ENV ----------
+const PORT = process.env.PORT || 5000;
+const MONGODB_URI = process.env.MONGODB_URI; // moet /bijbelzoek bevatten!
+const DB_NAME = process.env.DB_NAME || "bijbelzoek";
+const SELF_TEST = process.env.SELF_TEST === "1"; // zet tijdelijk aan voor boot-test
+const allowedOrigins = (process.env.CORS_ORIGIN ?? "")
+  .split(",").map(s => s.trim()).filter(Boolean);
 
-// ——— Bestaande routes (uit jouw project)
-import searchRoutes from "./routes/searchRoutes.js";
-import statsRoutes from "./routes/statsRoutes.js";
-import chapterRoutes from "./routes/chapterRoutes.js";
-//import { router as ai } from "./routes/ai.js"; // OpenRouter-gestuurde AI endpoints
-import ai from "./routes/ai.js";
-
-import exportRoutes from "./routes/export.js";
-
-// ——— Nieuwe routes voor bezoekersaantallen (analytics) en publieke feedback
-import analyticsRouter from "./routes/analytics.js";
-import feedbackRouter from "./routes/feedback.js";
-
+// ---------- App ----------
 const app = express();
+app.set("trust proxy", true);
+app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(compression());
+app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : undefined, credentials: true }));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false }));
 
-// ——— Security, CORS, parsers & logging
-app.disable("x-powered-by");
-app.use(helmet());
-
-app.get("/healthz", (req, res) => {
-  res.status(200).json({ ok: true, uptime: process.uptime() });
-});
-
-// Meerdere origins toestaan via ALLOWED_ORIGIN="http://localhost:5173,https://jouwdomein.nl"
-const allowed = (process.env.ALLOWED_ORIGIN || "http://localhost:5173")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-app.use(
-  cors({
-    origin: allowed,
-    credentials: false,
-  })
-);
-
-// JSON body (ruimer ivm AI/exports)
-app.use(express.json({ limit: "2mb" }));
-
-// Logging (mooier in dev)
-app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-
-// Indien achter proxy (Vercel/Render/NGINX), uncomment indien nodig:
-// app.set("trust proxy", 1);
-
-// ——— MongoDB connectie
-// || "mongodb://127.0.0.1:27017/bijbelzoek";
-const MONGO_URI = process.env.MONGO_URI 
-
-const uri = process.env.MONGODB_URI;
-if (!uri) {
-  console.error("❌ MONGODB_URI is niet gezet");
+// ---------- DB ----------
+if (!MONGODB_URI) {
+  console.error("❌ MONGODB_URI ontbreekt (tip: gebruik ...mongodb.net/BIJBELZOEK?...).");
   process.exit(1);
 }
 
-const dbName = process.env.DB_NAME || "bijbelzoek";
+const verseSchema = new mongoose.Schema({
+  version: { type: String, index: true },  // HSV/NKJV
+  book:    { type: String, index: true },
+  chapter: { type: Number, index: true },
+  verse:   { type: Number, index: true },
+  text:    { type: String, required: true }
+}, { versionKey: false });
 
-await mongoose.connect(uri, { dbName });
+verseSchema.index({ version: 1, book: 1, chapter: 1, verse: 1 }, { unique: true });
+verseSchema.index({ text: "text" });
 
-// tijdelijke debug (verwijder later weer):
-const total = await mongoose.connection.db.collection("verses").estimatedDocumentCount();
-console.log("DBG verses count:", total);
+const Verse = mongoose.model("Verse", verseSchema, "verses");
 
-mongoose
-  .connect(uri)
-  .then(() => console.log("✅ MongoDB verbonden"))
-  .catch((err) => {
-    console.error("❌ MongoDB fout:", err.message);
-    process.exit(1);
-  });
+// ---------- Helpers ----------
+const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const toArr = x => Array.isArray(x) ? x : String(x ?? "")
+  .split(",").map(s => s.trim()).filter(Boolean);
 
-// ——— Health
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
-
-// ——— Jouw bestaande API-routes
-app.use("/api/search", searchRoutes);
-app.use("/api/stats", statsRoutes);
-app.use("/api/chapter", chapterRoutes);
-app.use("/api/export", exportRoutes);
-console.log("[server] /api/export mounted");
-app.use("/api/ai", ai);
-
-// ——— NIEUW: Analytics (bezoekers-tracking) & Feedback
-// POST /api/analytics/track  | GET /api/analytics/stats
-app.use("/api/analytics", analyticsRouter);
-
-// GET /api/feedback          | POST /api/feedback
-app.use("/api/feedback", feedbackRouter);
-
-// Tijdelijke toevoeging voor crash logging etc.
-app.get("/health", (req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
-});
-
-// log missers – tijdelijk handig
-app.use((req, _res, next) => {
-  if (req.originalUrl.startsWith("/api/")) {
-    console.log("[MISS]", req.method, req.originalUrl);
+// ---------- Routes ----------
+app.get("/healthz", async (req, res) => {
+  try {
+    const ping = await mongoose.connection.db.admin().ping();
+    res.json({ ok: true, uptime: process.uptime(), db: mongoose.connection.db.databaseName, ping });
+  } catch {
+    res.json({ ok: true, uptime: process.uptime() }); // DB kan even wegvallen zonder health fail
   }
-  next();
 });
 
+// Flexibele SEARCH: GET én POST, words|word|q, exact|fuzzy
+app.get("/api/search", handleSearch);
+app.post("/api/search", handleSearch);
 
-// ——— 404 & error handlers
+async function handleSearch(req, res) {
+  try {
+    const q = { ...req.query, ...req.body };
+    const version = String(q.version || "HSV").toUpperCase();
+    const mode    = String(q.mode || "exact").toLowerCase();
+    const words   = toArr(q.words ?? q.word ?? q.q);
+    const page    = Math.max(1, parseInt(q.page) || 1);
+    const limit   = Math.min(50, parseInt(q.resultLimit) || 20);
+
+    if (!words.length) return res.status(400).json({ error: "words required" });
+
+    const and = [{ version }];
+    for (const w of words) {
+      const rx = mode === "exact"
+        ? new RegExp(`\\b${escapeRx(w)}\\b`, "i")
+        : new RegExp(escapeRx(w), "i");
+      and.push({ text: rx });
+    }
+
+    const [total, docs] = await Promise.all([
+      Verse.countDocuments({ $and: and }),
+      Verse.find({ $and: and })
+        .sort({ book: 1, chapter: 1, verse: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean()
+    ]);
+
+    res.json({
+      version, mode, words, total, page, resultLimit: limit,
+      results: docs.map(v => ({
+        ref: `${v.book} ${v.chapter}:${v.verse}`,
+        book: v.book, chapter: v.chapter, verse: v.verse, text: v.text
+      }))
+    });
+  } catch (e) {
+    console.error("search error:", e);
+    res.status(500).json({ error: "internal_error" });
+  }
+}
+
+// Stats-ALIAS: accepteert beide paden & param varianten
+app.get(["/api/stats/hits-by-book", "/api/stats/hitsByBook"], async (req, res) => {
+  try {
+    const version = String(req.query.version || "HSV").toUpperCase();
+    const word = (req.query.word || (req.query.words || "").split(",")[0] || "").trim();
+    if (!word) return res.status(400).json({ error: "word required" });
+    const rx = new RegExp(`\\b${escapeRx(word)}\\b`, "i");
+
+    const data = await Verse.aggregate([
+      { $match: { version, text: rx } },
+      { $group: { _id: "$book", hits: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
+    ]);
+
+    res.json({ version, word, data });
+  } catch (e) {
+    console.error("stats error:", e);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// Unieke versies
+app.get("/api/versions", async (req, res) => {
+  const versions = await Verse.distinct("version");
+  res.json({ versions });
+});
+
+// Debug rooktest
+app.get("/api/debug/smoke", async (req, res) => {
+  const total = await Verse.estimatedDocumentCount();
+  const sample = await Verse.find({ version: "HSV", text: /God/i })
+    .select({ _id: 0, book: 1, chapter: 1, verse: 1, text: 1 })
+    .limit(5).lean();
+  res.json({ db: mongoose.connection.db.databaseName, total, sampleCount: sample.length, sample });
+});
+
+// 404 JSON (alleen na alle routes)
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
-app.use((err, _req, res, _next) => {
-  console.error("❌ Server error:", err);
-  res.status(500).json({ error: err.message || "Server error" });
-});
 
-// ——— Start server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server draait op http://localhost:${PORT}`);
-});
+// ---------- Boot ----------
+(async () => {
+  try {
+    await mongoose.connect(MONGODB_URI, { dbName: DB_NAME });
+    await Verse.syncIndexes();
 
-export default app;
+    // Mini-DB proof
+    const count = await Verse.estimatedDocumentCount();
+    console.log(`✅ MongoDB verbonden (${mongoose.connection.db.databaseName}) — verses: ${count}`);
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Server luistert op http://localhost:${PORT}`);
+      if (SELF_TEST) runSelfTest(PORT).catch(err => console.error("SELF_TEST error:", err));
+    });
+  } catch (e) {
+    console.error("❌ DB connect error:", e.message);
+    process.exit(1);
+  }
+})();
+
+// ---------- Self-test (logs naar Render) ----------
+async function runSelfTest(port) {
+  // Node 18+ heeft global fetch
+  const base = `http://127.0.0.1:${port}`;
+
+  // 1) healthz
+  const h = await fetch(`${base}/healthz`).then(r => r.text());
+  console.log("SELF/healthz:", h);
+
+  // 2) search GET
+  const s = await fetch(`${base}/api/search?version=HSV&words=God&mode=exact&resultLimit=3`)
+    .then(r => r.text());
+  console.log("SELF/search (GET):", s);
+
+  // 3) search POST
+  const p = await fetch(`${base}/api/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version: "HSV", mode: "exact", words: ["God"], page: 1, resultLimit: 3 })
+  }).then(r => r.text());
+  console.log("SELF/search (POST):", p);
+
+  // 4) stats
+  const st = await fetch(`${base}/api/stats/hits-by-book?version=HSV&word=God`).then(r => r.text());
+  console.log("SELF/stats:", st);
+
+  // 5) versions
+  const v = await fetch(`${base}/api/versions`).then(r => r.text());
+  console.log("SELF/versions:", v);
+}
