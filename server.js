@@ -8,6 +8,10 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 
+app.get("/healthz", (req, res) => {
+  res.status(200).json({ ok: true, uptime: process.uptime() });
+});
+
 // ——— Locatie .env (naast dit bestand). Pas dit aan als jouw .env elders staat.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, ".env") });
@@ -56,9 +60,17 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 // app.set("trust proxy", 1);
 
 // ——— MongoDB connectie
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/bijbelzoek";
+// || "mongodb://127.0.0.1:27017/bijbelzoek";
+const MONGO_URI = process.env.MONGO_URI 
+
+const uri = process.env.MONGODB_URI;
+if (!uri) {
+  console.error("❌ MONGODB_URI is niet gezet");
+  process.exit(1);
+}
+
 mongoose
-  .connect(MONGO_URI)
+  .connect(uri)
   .then(() => console.log("✅ MongoDB verbonden"))
   .catch((err) => {
     console.error("❌ MongoDB fout:", err.message);
