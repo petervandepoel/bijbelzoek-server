@@ -69,13 +69,18 @@ if (!uri) {
   process.exit(1);
 }
 
+//bijbelzoek toegevoegd
 mongoose
-  .connect(uri)
+  .connect(uri, "bijbelzoek")
   .then(() => console.log("✅ MongoDB verbonden"))
   .catch((err) => {
     console.error("❌ MongoDB fout:", err.message);
     process.exit(1);
   });
+
+//deze2toegevoegd
+  const total = await mongoose.connection.db.collection("verses").estimatedDocumentCount();
+console.log("DBG verses count:", total);
 
 // ——— Health
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
