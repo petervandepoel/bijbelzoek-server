@@ -8,10 +8,6 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 
-app.get("/healthz", (req, res) => {
-  res.status(200).json({ ok: true, uptime: process.uptime() });
-});
-
 // ——— Locatie .env (naast dit bestand). Pas dit aan als jouw .env elders staat.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, ".env") });
@@ -36,6 +32,10 @@ const app = express();
 // ——— Security, CORS, parsers & logging
 app.disable("x-powered-by");
 app.use(helmet());
+
+app.get("/healthz", (req, res) => {
+  res.status(200).json({ ok: true, uptime: process.uptime() });
+});
 
 // Meerdere origins toestaan via ALLOWED_ORIGIN="http://localhost:5173,https://jouwdomein.nl"
 const allowed = (process.env.ALLOWED_ORIGIN || "http://localhost:5173")
