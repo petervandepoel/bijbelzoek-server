@@ -140,7 +140,7 @@ function htmlSkeleton({ generalNotes, favoritesTexts, favoritesCharts, aiResults
   <h2>Favoriete grafieken</h2>
   ${(favoritesCharts || []).map((c,i)=>`
     <article class="card">
-      <div><strong>${esc(c.title || \`Grafiek \${i+1}\`)}</strong></div>
+    <div><strong>${esc(c.title || ("Grafiek " + (i+1)))}</strong></div>
       <div>Versie: ${esc(c.version || "HSV")} • Woorden: ${esc((c.words || []).join(", "))}</div>
       <div class="chart"><img id="chart-${i}" alt="Grafiek ${i+1}" /></div>
       <div id="chart-table-${i}"></div>
