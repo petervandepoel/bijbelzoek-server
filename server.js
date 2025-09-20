@@ -58,21 +58,6 @@ try {
   Verse = mongoose.model("Verse", verseSchema, "verses");
 }
 
-// ──────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────
-const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
-const makeRegex = (w, mode) => {
-  if (mode === "exact") return new RegExp(`\\b${escapeRx(w)}\\b`, "iu"); // woordgrenzen, unicode
-  return new RegExp(escapeRx(w), "iu"); // fuzzy: substring
-};
-
-
-// ──────────────────────────────────────────────────────────────
-// Search (sluit aan op SearchResults.jsx)
-// ──────────────────────────────────────────────────────────────
-// ──────────────────────────────────────────────────────────────
 // Helpers bovenin server.js
 const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
