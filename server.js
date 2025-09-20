@@ -39,6 +39,8 @@ app.use(express.urlencoded({ extended: false }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
 // ──────────────────────────────────────────────────────────────
+// Health
+// ──────────────────────────────────────────────────────────────
 app.get("/healthz", async (_req, res) => {
   try {
     const ping = await mongoose.connection.db.admin().ping();
@@ -47,24 +49,27 @@ app.get("/healthz", async (_req, res) => {
     res.json({ ok: true, uptime: process.uptime() });
   }
 });
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
-app.get("/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ──────────────────────────────────────────────────────────────
-// Schema & model (centrale bron van waarheid)
+// Verse model (OverwriteModelError fix)
 // ──────────────────────────────────────────────────────────────
-const verseSchema = new mongoose.Schema({
-  version: { type: String, index: true }, // "HSV" | "NKJV"
-  book:    { type: String, index: true },
-  chapter: { type: Number, index: true },
-  verse:   { type: Number, index: true },
-  text:    { type: String, required: true },
-}, { versionKey: false });
+let Verse;
+try {
+  Verse = mongoose.model("Verse");
+} catch {
+  const verseSchema = new mongoose.Schema({
+    version: { type: String, index: true },
+    book:    { type: String, index: true },
+    chapter: { type: Number, index: true },
+    verse:   { type: Number, index: true },
+    text:    { type: String, required: true },
+  }, { versionKey: false });
 
-verseSchema.index({ version: 1, book: 1, chapter: 1, verse: 1 }, { unique: true });
-verseSchema.index({ text: "text" });
+  verseSchema.index({ version: 1, book: 1, chapter: 1, verse: 1 }, { unique: true });
+  verseSchema.index({ text: "text" });
 
-const Verse = mongoose.model("Verse", verseSchema, "verses");
+  Verse = mongoose.model("Verse", verseSchema, "verses");
+}
 
 // ──────────────────────────────────────────────────────────────
 // Helpers
@@ -73,58 +78,10 @@ const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
 
 // ──────────────────────────────────────────────────────────────
-// Search (nu: exact + fuzzy + OR)
-// mode: "exact" (default) | "fuzzy" | "or" | "any"
+// Stats endpoints
 // ──────────────────────────────────────────────────────────────
-app.get("/api/search", handleSearch);
-app.post("/api/search", handleSearch);
 
-async function handleSearch(req, res) {
-  try {
-    const q = { ...req.query, ...req.body };
-    const version = String(q.version || "HSV").toUpperCase();
-    const mode    = String(q.mode || "exact").toLowerCase();
-    const words   = toArr(q.words ?? q.word ?? q.q);
-    const page    = Math.max(1, parseInt(q.page) || 1);
-    const limit   = Math.min(50, parseInt(q.resultLimit) || 20);
-
-    if (!words.length) return res.status(400).json({ error: "words required" });
-
-    const mkRx = (w) =>
-      mode === "exact" ? new RegExp(`\\b${escapeRx(w)}\\b`, "i") : new RegExp(escapeRx(w), "i");
-
-    let filter = { version };
-    if (mode === "or" || mode === "any") {
-      filter = { version, $or: words.map(w => ({ text: mkRx(w) })) };
-    } else {
-      filter = { $and: [{ version }, ...words.map(w => ({ text: mkRx(w) }))] };
-    }
-
-    const [total, docs] = await Promise.all([
-      Verse.countDocuments(filter),
-      Verse.find(filter)
-        .sort({ book: 1, chapter: 1, verse: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean()
-    ]);
-
-    res.json({
-      version, mode, words, total, page, resultLimit: limit,
-      results: docs.map(v => ({
-        ref: `${v.book} ${v.chapter}:${v.verse}`,
-        book: v.book ?? null, chapter: v.chapter, verse: v.verse, text: v.text
-      }))
-    });
-  } catch (e) {
-    console.error("search error:", e);
-    res.status(500).json({ error: "internal_error" });
-  }
-}
-
-// ──────────────────────────────────────────────────────────────
-// Stats: hits by book (beide aliaspaden)
-// ──────────────────────────────────────────────────────────────
+// ✅ 1. hitsByBook (frontend FilterPanel gebruikt dit)
 app.get(["/api/stats/hits-by-book", "/api/stats/hitsByBook"], async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
@@ -135,7 +92,8 @@ app.get(["/api/stats/hits-by-book", "/api/stats/hitsByBook"], async (req, res) =
     const data = await Verse.aggregate([
       { $match: { version, book: { $ne: null }, text: rx } },
       { $group: { _id: "$book", hits: { $sum: 1 } } },
-      { $sort: { _id: 1 } }
+      { $project: { _id: 0, book: "$_id", hits: 1 } },   // ← fix: frontend verwacht "book"
+      { $sort: { book: 1 } }
     ]);
 
     res.json({ version, word, data });
@@ -145,13 +103,7 @@ app.get(["/api/stats/hits-by-book", "/api/stats/hitsByBook"], async (req, res) =
   }
 });
 
-// ──────────────────────────────────────────────────────────────
-/**
- * NIEUW: /api/stats/wordcounts
- * Input: version, words=komma, mode=exact|fuzzy
- * Output: [{ book, <w1>: n, <w2>: n, ... }]
- * Telt verzen per boek waarin een woord voorkomt (presence, niet frequentie in tekst).
- */
+// ✅ 2. wordcounts (frontend WordFrequencyChart gebruikt dit)
 app.get("/api/stats/wordcounts", async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
@@ -159,20 +111,17 @@ app.get("/api/stats/wordcounts", async (req, res) => {
     const mode = String(req.query.mode || "exact").toLowerCase();
     if (!words.length) return res.json({ version, data: [] });
 
-    const conds = words.map(w => ({
-      word: w,
-      expr: { $regexMatch: { input: "$text", regex: mode === "exact" ? `\\\\b${escapeRx(w)}\\\\b` : escapeRx(w), options: "i" } }
-    }));
-
-    // Dynamische $group velden
-    const group = { _id: "$book" };
-    for (const c of conds) {
-      group[c.word] = { $sum: { $cond: [c.expr, 1, 0] } };
+    const groupStage = { _id: "$book" };
+    for (const w of words) {
+      const rx = mode === "exact" ? new RegExp(`\\b${escapeRx(w)}\\b`, "i") : new RegExp(escapeRx(w), "i");
+      groupStage[w] = {
+        $sum: { $cond: [{ $regexMatch: { input: "$text", regex: rx } }, 1, 0] }
+      };
     }
 
     const rows = await Verse.aggregate([
       { $match: { version, book: { $ne: null } } },
-      { $group: group },
+      { $group: groupStage },
       { $project: { _id: 0, book: "$_id", ...Object.fromEntries(words.map(w => [w, `$${w}`])) } },
       { $sort: { book: 1 } }
     ]);
@@ -185,22 +134,7 @@ app.get("/api/stats/wordcounts", async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// Versions & debug
-// ──────────────────────────────────────────────────────────────
-app.get("/api/versions", async (_req, res) => {
-  const versions = await Verse.distinct("version");
-  res.json({ versions });
-});
-
-app.get("/api/debug/smoke", async (_req, res) => {
-  const total = await Verse.estimatedDocumentCount();
-  const sample = await Verse.find({ version: "HSV", text: /God/i })
-    .select({ _id: 0, book: 1, chapter: 1, verse: 1, text: 1 }).limit(5).lean();
-  res.json({ db: mongoose.connection.db.databaseName, total, sampleCount: sample.length, sample });
-});
-
-// ──────────────────────────────────────────────────────────────
-// Projectroutes (chapter/export/ai/analytics/feedback)
+// Import project routes (chapter, export, ai, analytics, feedback)
 // ──────────────────────────────────────────────────────────────
 import chapterRoutes from "./routes/chapterRoutes.js";
 import exportRoutes from "./routes/export.js";
@@ -213,18 +147,6 @@ app.use("/api/export", exportRoutes);
 app.use("/api/ai", ai);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/feedback", feedbackRouter);
-console.log("[server] Extra routes mounted");
-
-// ──────────────────────────────────────────────────────────────
-app.use((req, _res, next) => {
-  if (req.originalUrl.startsWith("/api/")) console.log("[MISS]", req.method, req.originalUrl);
-  next();
-});
-app.use((req, res) => res.status(404).json({ error: "Not found" }));
-app.use((err, _req, res, _next) => {
-  console.error("❌ Server error:", err);
-  res.status(500).json({ error: err.message || "Server error" });
-});
 
 // ──────────────────────────────────────────────────────────────
 // Boot
@@ -233,9 +155,10 @@ app.use((err, _req, res, _next) => {
   try {
     await mongoose.connect(MONGODB_URI, { dbName: DB_NAME });
     await Verse.syncIndexes();
+
     const count = await Verse.estimatedDocumentCount();
-    const versions = await Verse.distinct("version");
-    console.log(`✅ MongoDB verbonden (${mongoose.connection.db.databaseName}) — verses: ${count}, versions: ${versions.join(", ") || "(none)"}`);
+    console.log(`✅ MongoDB verbonden (${mongoose.connection.db.databaseName}) — verses: ${count}`);
+
     app.listen(PORT, () => console.log(`🚀 Server luistert op http://localhost:${PORT}`));
   } catch (e) {
     console.error("❌ DB connect error:", e.message);
