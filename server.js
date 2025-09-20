@@ -68,38 +68,50 @@ const makeRegex = (w, mode) => {
 
 // ──────────────────────────────────────────────────────────────
 // Search (sluit aan op SearchResults.jsx + doorklik)
+// ──────────────────────────────────────────────────────────────
+// Search (sluit aan op SearchResults.jsx + doorklik)
 app.get("/api/search", async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
-    const mode = String(req.query.mode || "or").toLowerCase(); // standaard OR
-    const words = toArr(req.query.words ?? req.query.q);
+    const mode = String(req.query.mode || "or").toLowerCase();
+    let words = req.query.words ?? req.query.q;
+
+    // altijd naar array
+    words = toArr(words);
+
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, parseInt(req.query.resultLimit || req.query.limit) || 20);
 
-    // optionele boekfilter(s)
-    const bookParam = req.query.book ?? req.query.books;
-    const books = toArr(bookParam);
+    // optionele boekfilter
+    const books = toArr(req.query.book ?? req.query.books);
 
-    if (!words.length) return res.json({ results: [], total: 0 });
+    // geen woorden → lege response
+    if (!words.length) {
+      return res.json({
+        version, mode, words: [], books,
+        total: 0, page, resultLimit: limit,
+        results: []
+      });
+    }
 
-    // tekst-criteria
-    const textPart = (mode === "and")
-      ? { $and: words.map(w => ({ text: makeRegex(w, "exact") })) } // AND = exact per woord
-      : (mode === "exact")
-        ? { $or: words.map(w => ({ text: makeRegex(w, "exact") })) } // exact maar OR tussen woorden
-        : (mode === "fuzzy")
-          ? { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) } // fuzzy OR
-          : { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) }; // default OR (fuzzy)
+    // tekstfilter
+    let textPart;
+    if (mode === "and") {
+      textPart = { $and: words.map(w => ({ text: makeRegex(w, "exact") })) };
+    } else if (mode === "exact") {
+      textPart = { $or: words.map(w => ({ text: makeRegex(w, "exact") })) };
+    } else if (mode === "fuzzy") {
+      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
+    } else {
+      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
+    }
 
-    // basisfilter
     const filter = { version };
-    // merge mode
     if (textPart.$and) filter.$and = [{ version }, ...textPart.$and];
     else Object.assign(filter, textPart);
 
-    // boekfilter
     if (books.length === 1) {
-      filter.book = books[0]; // exact match op boeknaam
+      filter.book = books[0];
     } else if (books.length > 1) {
       filter.book = { $in: books };
     }
@@ -125,10 +137,11 @@ app.get("/api/search", async (req, res) => {
       }))
     });
   } catch (e) {
-    console.error("search error:", e);
+    console.error("❌ search error:", e);
     res.status(500).json({ error: "internal_error" });
   }
 });
+
 
 
 // ──────────────────────────────────────────────────────────────
