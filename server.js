@@ -63,36 +63,60 @@ try {
 // ──────────────────────────────────────────────────────────────
 const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
-
 const makeRegex = (w, mode) => {
-  if (mode === "exact") {
-    // woordgrens, case-insensitive, unicode (accent tolerant)
-    return new RegExp(`\\b${escapeRx(w)}\\b`, "iu");
-  }
-  // fuzzy: substring, case-insensitive
-  return new RegExp(escapeRx(w), "iu");
+  if (mode === "exact") return new RegExp(`\\b${escapeRx(w)}\\b`, "iu"); // woordgrenzen, unicode
+  return new RegExp(escapeRx(w), "iu"); // fuzzy: substring
 };
+
 
 // ──────────────────────────────────────────────────────────────
 // Search (sluit aan op SearchResults.jsx)
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
+// Helpers bovenin server.js
+const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
+const makeRegex = (w, mode) => {
+  if (mode === "exact") return new RegExp(`\\b${escapeRx(w)}\\b`, "iu"); // woordgrenzen, unicode
+  return new RegExp(escapeRx(w), "iu"); // fuzzy: substring
+};
+
+// ──────────────────────────────────────────────────────────────
+// Search (sluit aan op SearchResults.jsx + doorklik)
 app.get("/api/search", async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
     const mode = String(req.query.mode || "or").toLowerCase(); // standaard OR
-    const words = toArr(req.query.words);
+    const words = toArr(req.query.words ?? req.query.q);
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(50, parseInt(req.query.resultLimit) || 20);
+    const limit = Math.min(50, parseInt(req.query.resultLimit || req.query.limit) || 20);
+
+    // optionele boekfilter(s)
+    const bookParam = req.query.book ?? req.query.books;
+    const books = toArr(bookParam);
 
     if (!words.length) return res.json({ results: [], total: 0 });
 
-    let filter;
-    if (mode === "or" || mode === "any") {
-      filter = { version, $or: words.map(w => ({ text: makeRegex(w, mode) })) };
-    } else if (mode === "and") {
-      filter = { $and: [{ version }, ...words.map(w => ({ text: makeRegex(w, mode) }))] };
-    } else {
-      filter = { version, $or: words.map(w => ({ text: makeRegex(w, "exact") })) };
+    // tekst-criteria
+    const textPart = (mode === "and")
+      ? { $and: words.map(w => ({ text: makeRegex(w, "exact") })) } // AND = exact per woord
+      : (mode === "exact")
+        ? { $or: words.map(w => ({ text: makeRegex(w, "exact") })) } // exact maar OR tussen woorden
+        : (mode === "fuzzy")
+          ? { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) } // fuzzy OR
+          : { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) }; // default OR (fuzzy)
+
+    // basisfilter
+    const filter = { version };
+    // merge mode
+    if (textPart.$and) filter.$and = [{ version }, ...textPart.$and];
+    else Object.assign(filter, textPart);
+
+    // boekfilter
+    if (books.length === 1) {
+      filter.book = books[0]; // exact match op boeknaam
+    } else if (books.length > 1) {
+      filter.book = { $in: books };
     }
 
     const [total, docs] = await Promise.all([
@@ -105,10 +129,14 @@ app.get("/api/search", async (req, res) => {
     ]);
 
     res.json({
-      version, mode, words, total, page, resultLimit: limit,
+      version, mode, words, books,
+      total, page, resultLimit: limit,
       results: docs.map(v => ({
-        ref: `${v.book} ${v.chapter}:${v.verse}`,
-        book: v.book, chapter: v.chapter, verse: v.verse, text: v.text
+        ref: `${v.book ?? "Onbekend"} ${v.chapter}:${v.verse}`,
+        book: v.book ?? null,
+        chapter: v.chapter,
+        verse: v.verse,
+        text: v.text
       }))
     });
   } catch (e) {
@@ -116,6 +144,7 @@ app.get("/api/search", async (req, res) => {
     res.status(500).json({ error: "internal_error" });
   }
 });
+
 
 // ──────────────────────────────────────────────────────────────
 // Stats (sluit aan op FilterPanel.jsx en WordFrequencyChart.jsx)
