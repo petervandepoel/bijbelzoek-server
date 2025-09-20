@@ -15,15 +15,14 @@ dotenv.config({ path: join(__dirname, ".env") });
 
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = process.env.DB_NAME || "bijbelzoek";
+const DB_NAME = (process.env.DB_NAME || "bijbelzoek").trim();
+const allowedOrigins = (process.env.CORS_ORIGIN || process.env.ALLOWED_ORIGIN || "")
+  .split(",").map(s => s.trim()).filter(Boolean);
 
 if (!MONGODB_URI) {
   console.error("❌ MONGODB_URI ontbreekt");
   process.exit(1);
 }
-
-const allowedOrigins = (process.env.CORS_ORIGIN || process.env.ALLOWED_ORIGIN || "")
-  .split(",").map(s => s.trim()).filter(Boolean);
 
 // ---------- App ----------
 const app = express();
@@ -31,12 +30,16 @@ app.disable("x-powered-by");
 app.set("trust proxy", true);
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(compression());
-app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : undefined, credentials: true }));
+app.use(cors({
+  origin: allowedOrigins.length ? allowedOrigins : undefined,
+  credentials: true
+}));
 app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: false }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
 // ---------- Health ----------
-app.get("/healthz", async (req, res) => {
+app.get("/healthz", async (_req, res) => {
   try {
     const ping = await mongoose.connection.db.admin().ping();
     res.json({ ok: true, uptime: process.uptime(), db: mongoose.connection.db.databaseName, ping });
@@ -47,25 +50,27 @@ app.get("/healthz", async (req, res) => {
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.get("/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// ---------- Schema ----------
+// ---------- Schema (same as when search worked) ----------
 const verseSchema = new mongoose.Schema({
-  version: { type: String, index: true },
-  book: { type: String, index: true },
+  version: { type: String, index: true },  // "HSV" | "NKJV" etc.
+  book:    { type: String, index: true },
   chapter: { type: Number, index: true },
-  verse: { type: Number, index: true },
-  text: { type: String, required: true }
+  verse:   { type: Number, index: true },
+  text:    { type: String, required: true }
 }, { versionKey: false });
 
+// Important indexes
 verseSchema.index({ version: 1, book: 1, chapter: 1, verse: 1 }, { unique: true });
 verseSchema.index({ text: "text" });
 
+// Use the exact collection name we seeded into:
 const Verse = mongoose.model("Verse", verseSchema, "verses");
 
 // ---------- Helpers ----------
 const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
 
-// ---------- Core API ----------
+// ---------- Inline CORE API (this was the “working” search) ----------
 app.get("/api/search", handleSearch);
 app.post("/api/search", handleSearch);
 
@@ -73,13 +78,14 @@ async function handleSearch(req, res) {
   try {
     const q = { ...req.query, ...req.body };
     const version = String(q.version || "HSV").toUpperCase();
-    const mode = String(q.mode || "exact").toLowerCase();
-    const words = toArr(q.words ?? q.word ?? q.q);
-    const page = Math.max(1, parseInt(q.page) || 1);
-    const limit = Math.min(50, parseInt(q.resultLimit) || 20);
+    const mode    = String(q.mode || "exact").toLowerCase();
+    const words   = toArr(q.words ?? q.word ?? q.q);
+    const page    = Math.max(1, parseInt(q.page) || 1);
+    const limit   = Math.min(50, parseInt(q.resultLimit) || 20);
 
     if (!words.length) return res.status(400).json({ error: "words required" });
 
+    // Build AND of regexes per word on "text" + fixed version
     const and = [{ version }];
     for (const w of words) {
       const rx = mode === "exact"
@@ -110,14 +116,14 @@ async function handleSearch(req, res) {
   }
 }
 
-// Stats
+// Stats: both spellings supported
 app.get(["/api/stats/hits-by-book", "/api/stats/hitsByBook"], async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
     const word = (req.query.word || (req.query.words || "").split(",")[0] || "").trim();
     if (!word) return res.status(400).json({ error: "word required" });
-    const rx = new RegExp(`\\b${escapeRx(word)}\\b`, "i");
 
+    const rx = new RegExp(`\\b${escapeRx(word)}\\b`, "i");
     const data = await Verse.aggregate([
       { $match: { version, text: rx } },
       { $group: { _id: "$book", hits: { $sum: 1 } } },
@@ -137,7 +143,7 @@ app.get("/api/versions", async (_req, res) => {
   res.json({ versions });
 });
 
-// Debug smoke
+// Debug: quick smoke
 app.get("/api/debug/smoke", async (_req, res) => {
   const total = await Verse.estimatedDocumentCount();
   const sample = await Verse.find({ version: "HSV", text: /God/i })
@@ -146,7 +152,7 @@ app.get("/api/debug/smoke", async (_req, res) => {
   res.json({ db: mongoose.connection.db.databaseName, total, sampleCount: sample.length, sample });
 });
 
-// ---------- Extra project routes ----------
+// ---------- Other project routes (kept) ----------
 import chapterRoutes from "./routes/chapterRoutes.js";
 import exportRoutes from "./routes/export.js";
 import ai from "./routes/ai.js";
@@ -160,7 +166,7 @@ app.use("/api/analytics", analyticsRouter);
 app.use("/api/feedback", feedbackRouter);
 console.log("[server] Extra routes mounted");
 
-// ---------- Missers loggen ----------
+// ---------- Missed API log (helps spot typos) ----------
 app.use((req, _res, next) => {
   if (req.originalUrl.startsWith("/api/")) {
     console.log("[MISS]", req.method, req.originalUrl);
@@ -168,21 +174,27 @@ app.use((req, _res, next) => {
   next();
 });
 
-// ---------- Error handlers ----------
+// ---------- 404 & Error ----------
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 app.use((err, _req, res, _next) => {
   console.error("❌ Server error:", err);
   res.status(500).json({ error: err.message || "Server error" });
 });
 
-// ---------- Boot ----------
+// ---------- Boot (force DB_NAME, prove data) ----------
 (async () => {
   try {
     await mongoose.connect(MONGODB_URI, { dbName: DB_NAME });
     await Verse.syncIndexes();
 
+    // Loud diagnostics so you see the real DB instantly
     const count = await Verse.estimatedDocumentCount();
-    console.log(`✅ MongoDB verbonden (${DB_NAME}) — verses: ${count}`);
+    const versions = await Verse.distinct("version");
+    console.log(`✅ MongoDB verbonden (${mongoose.connection.db.databaseName}) — verses: ${count}, versions: ${versions.join(", ") || "(none)"}`);
+
+    if (count === 0) {
+      console.warn("⚠️ 0 verses in collection. Dit is meestal: verkeerde DB in URI of seed niet (meer) gedaan.");
+    }
 
     app.listen(PORT, () => {
       console.log(`🚀 Server luistert op http://localhost:${PORT}`);
