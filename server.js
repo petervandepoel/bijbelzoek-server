@@ -77,22 +77,76 @@ try {
 const escapeRx = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
 
+const makeRegex = (w, mode) => {
+  if (mode === "exact") {
+    // woordgrens + case-insensitive
+    return new RegExp(`\\b${escapeRx(w)}\\b`, "iu");
+  }
+  // fuzzy = substring + case-insensitive
+  return new RegExp(escapeRx(w), "iu");
+};
+
+// ──────────────────────────────────────────────────────────────
+// Search endpoint
+// ──────────────────────────────────────────────────────────────
+app.get("/api/search", async (req, res) => {
+  try {
+    const version = String(req.query.version || "HSV").toUpperCase();
+    const mode = String(req.query.mode || "or").toLowerCase(); // standaard OR
+    const words = toArr(req.query.words);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, parseInt(req.query.resultLimit) || 20);
+
+    if (!words.length) return res.json({ results: [], total: 0 });
+
+    let filter;
+    if (mode === "or" || mode === "any") {
+      filter = { version, $or: words.map(w => ({ text: makeRegex(w, mode) })) };
+    } else if (mode === "and") {
+      filter = { $and: [{ version }, ...words.map(w => ({ text: makeRegex(w, mode) }))] };
+    } else {
+      // fallback exact = zelfde als AND
+      filter = { $and: [{ version }, ...words.map(w => ({ text: makeRegex(w, "exact") }))] };
+    }
+
+    const [total, docs] = await Promise.all([
+      Verse.countDocuments(filter),
+      Verse.find(filter)
+        .sort({ book: 1, chapter: 1, verse: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean()
+    ]);
+
+    res.json({
+      version, mode, words, total, page, resultLimit: limit,
+      results: docs.map(v => ({
+        ref: `${v.book} ${v.chapter}:${v.verse}`,
+        book: v.book, chapter: v.chapter, verse: v.verse, text: v.text
+      }))
+    });
+  } catch (e) {
+    console.error("search error:", e);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 // ──────────────────────────────────────────────────────────────
 // Stats endpoints
 // ──────────────────────────────────────────────────────────────
-
-// ✅ 1. hitsByBook (frontend FilterPanel gebruikt dit)
 app.get(["/api/stats/hits-by-book", "/api/stats/hitsByBook"], async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
     const word = (req.query.word || (req.query.words || "").split(",")[0] || "").trim();
     if (!word) return res.status(400).json({ error: "word required" });
 
-    const rx = new RegExp(`\\b${escapeRx(word)}\\b`, "i");
+    const mode = String(req.query.mode || "or").toLowerCase();
+    const rx = makeRegex(word, mode);
+
     const data = await Verse.aggregate([
       { $match: { version, book: { $ne: null }, text: rx } },
       { $group: { _id: "$book", hits: { $sum: 1 } } },
-      { $project: { _id: 0, book: "$_id", hits: 1 } },   // ← fix: frontend verwacht "book"
+      { $project: { _id: 0, book: "$_id", hits: 1 } },
       { $sort: { book: 1 } }
     ]);
 
@@ -103,17 +157,16 @@ app.get(["/api/stats/hits-by-book", "/api/stats/hitsByBook"], async (req, res) =
   }
 });
 
-// ✅ 2. wordcounts (frontend WordFrequencyChart gebruikt dit)
 app.get("/api/stats/wordcounts", async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
     const words = toArr(req.query.words);
-    const mode = String(req.query.mode || "exact").toLowerCase();
+    const mode = String(req.query.mode || "or").toLowerCase();
     if (!words.length) return res.json({ version, data: [] });
 
     const groupStage = { _id: "$book" };
     for (const w of words) {
-      const rx = mode === "exact" ? new RegExp(`\\b${escapeRx(w)}\\b`, "i") : new RegExp(escapeRx(w), "i");
+      const rx = makeRegex(w, mode);
       groupStage[w] = {
         $sum: { $cond: [{ $regexMatch: { input: "$text", regex: rx } }, 1, 0] }
       };
@@ -134,7 +187,22 @@ app.get("/api/stats/wordcounts", async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// Import project routes (chapter, export, ai, analytics, feedback)
+// Versions & debug
+// ──────────────────────────────────────────────────────────────
+app.get("/api/versions", async (_req, res) => {
+  const versions = await Verse.distinct("version");
+  res.json({ versions });
+});
+
+app.get("/api/debug/smoke", async (_req, res) => {
+  const total = await Verse.estimatedDocumentCount();
+  const sample = await Verse.find({ version: "HSV", text: /God/i })
+    .select({ _id: 0, book: 1, chapter: 1, verse: 1, text: 1 }).limit(5).lean();
+  res.json({ db: mongoose.connection.db.databaseName, total, sampleCount: sample.length, sample });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Projectroutes
 // ──────────────────────────────────────────────────────────────
 import chapterRoutes from "./routes/chapterRoutes.js";
 import exportRoutes from "./routes/export.js";
