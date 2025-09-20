@@ -138,7 +138,7 @@ app.get("/api/search", async (req, res) => {
     });
   } catch (e) {
     console.error("❌ search error:", e);
-    res.status(500).json({ error: "internal_error" });
+    res.status(500).json({ error: "internal_errors" });
   }
 });
 
