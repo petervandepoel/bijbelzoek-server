@@ -70,22 +70,36 @@ const makeRegex = (w, mode) => {
 // Search (sluit aan op SearchResults.jsx + doorklik)
 // ──────────────────────────────────────────────────────────────
 // Search (sluit aan op SearchResults.jsx + doorklik)
+// ──────────────────────────────────────────────────────────────
+// Search API
 app.get("/api/search", async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
     const mode = String(req.query.mode || "or").toLowerCase();
-    let words = req.query.words ?? req.query.q;
 
-    // altijd naar array
-    words = toArr(words);
+    // Haal woorden uit `words` of `q`
+    let rawWords = req.query.words || req.query.q;
+    let words = [];
+
+    if (typeof rawWords === "string") {
+      words = rawWords.split(",").map(w => w.trim()).filter(Boolean);
+    } else if (Array.isArray(rawWords)) {
+      words = rawWords.map(w => String(w).trim()).filter(Boolean);
+    }
 
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, parseInt(req.query.resultLimit || req.query.limit) || 20);
 
     // optionele boekfilter
-    const books = toArr(req.query.book ?? req.query.books);
+    let rawBooks = req.query.book || req.query.books;
+    let books = [];
+    if (typeof rawBooks === "string") {
+      books = rawBooks.split(",").map(b => b.trim()).filter(Boolean);
+    } else if (Array.isArray(rawBooks)) {
+      books = rawBooks.map(b => String(b).trim()).filter(Boolean);
+    }
 
-    // geen woorden → lege response
+    // geen zoekwoorden → lege response
     if (!words.length) {
       return res.json({
         version, mode, words: [], books,
@@ -94,7 +108,7 @@ app.get("/api/search", async (req, res) => {
       });
     }
 
-    // tekstfilter
+    // tekstfilter bouwen
     let textPart;
     if (mode === "and") {
       textPart = { $and: words.map(w => ({ text: makeRegex(w, "exact") })) };
@@ -103,19 +117,22 @@ app.get("/api/search", async (req, res) => {
     } else if (mode === "fuzzy") {
       textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
     } else {
-      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
+      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) }; // default OR fuzzy
     }
 
+    // basisfilter
     const filter = { version };
     if (textPart.$and) filter.$and = [{ version }, ...textPart.$and];
     else Object.assign(filter, textPart);
 
+    // boekfilter
     if (books.length === 1) {
       filter.book = books[0];
     } else if (books.length > 1) {
       filter.book = { $in: books };
     }
 
+    // query uitvoeren
     const [total, docs] = await Promise.all([
       Verse.countDocuments(filter),
       Verse.find(filter)
@@ -125,6 +142,7 @@ app.get("/api/search", async (req, res) => {
         .lean()
     ]);
 
+    // response
     res.json({
       version, mode, words, books,
       total, page, resultLimit: limit,
@@ -138,9 +156,10 @@ app.get("/api/search", async (req, res) => {
     });
   } catch (e) {
     console.error("❌ search error:", e);
-    res.status(500).json({ error: "internal_errors" });
+    res.status(500).json({ error: "internal_error" });
   }
 });
+
 
 
 
