@@ -67,45 +67,37 @@ const makeRegex = (w, mode) => {
 };
 
 // ──────────────────────────────────────────────────────────────
-// Search (sluit aan op SearchResults.jsx + doorklik)
-// ──────────────────────────────────────────────────────────────
-// Search (sluit aan op SearchResults.jsx + doorklik)
-// ──────────────────────────────────────────────────────────────
-// Search API
 app.get("/api/search", async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
     const mode = String(req.query.mode || "or").toLowerCase();
 
-    // Haal woorden uit `words` of `q`
-    let rawWords = req.query.words || req.query.q;
-    let words = [];
+    // herschrijf q -> words
+    if (!req.query.words && req.query.q) {
+      req.query.words = req.query.q;
+    }
 
-    if (typeof rawWords === "string") {
-      words = rawWords.split(",").map(w => w.trim()).filter(Boolean);
-    } else if (Array.isArray(rawWords)) {
-      words = rawWords.map(w => String(w).trim()).filter(Boolean);
+    // maak array van words
+    let words = [];
+    if (typeof req.query.words === "string") {
+      words = req.query.words.split(",").map(w => w.trim()).filter(Boolean);
+    } else if (Array.isArray(req.query.words)) {
+      words = req.query.words.map(w => String(w).trim()).filter(Boolean);
     }
 
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, parseInt(req.query.resultLimit || req.query.limit) || 20);
 
-    // optionele boekfilter
-    let rawBooks = req.query.book || req.query.books;
+    // boekfilter
     let books = [];
-    if (typeof rawBooks === "string") {
-      books = rawBooks.split(",").map(b => b.trim()).filter(Boolean);
-    } else if (Array.isArray(rawBooks)) {
-      books = rawBooks.map(b => String(b).trim()).filter(Boolean);
+    if (typeof req.query.book === "string") {
+      books = req.query.book.split(",").map(b => b.trim()).filter(Boolean);
+    } else if (Array.isArray(req.query.book)) {
+      books = req.query.book.map(b => String(b).trim()).filter(Boolean);
     }
 
-    // geen zoekwoorden → lege response
     if (!words.length) {
-      return res.json({
-        version, mode, words: [], books,
-        total: 0, page, resultLimit: limit,
-        results: []
-      });
+      return res.json({ version, mode, words: [], books, total: 0, page, resultLimit: limit, results: [] });
     }
 
     // tekstfilter bouwen
@@ -117,22 +109,16 @@ app.get("/api/search", async (req, res) => {
     } else if (mode === "fuzzy") {
       textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
     } else {
-      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) }; // default OR fuzzy
+      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
     }
 
-    // basisfilter
     const filter = { version };
     if (textPart.$and) filter.$and = [{ version }, ...textPart.$and];
     else Object.assign(filter, textPart);
 
-    // boekfilter
-    if (books.length === 1) {
-      filter.book = books[0];
-    } else if (books.length > 1) {
-      filter.book = { $in: books };
-    }
+    if (books.length === 1) filter.book = books[0];
+    else if (books.length > 1) filter.book = { $in: books };
 
-    // query uitvoeren
     const [total, docs] = await Promise.all([
       Verse.countDocuments(filter),
       Verse.find(filter)
@@ -142,10 +128,8 @@ app.get("/api/search", async (req, res) => {
         .lean()
     ]);
 
-    // response
     res.json({
-      version, mode, words, books,
-      total, page, resultLimit: limit,
+      version, mode, words, books, total, page, resultLimit: limit,
       results: docs.map(v => ({
         ref: `${v.book ?? "Onbekend"} ${v.chapter}:${v.verse}`,
         book: v.book ?? null,
@@ -159,6 +143,7 @@ app.get("/api/search", async (req, res) => {
     res.status(500).json({ error: "internal_error" });
   }
 });
+
 
 
 
