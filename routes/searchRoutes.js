@@ -1,8 +1,7 @@
-// server/routes/searchRoutes.js
 import express from "express";
 import BibleVerse from "../models/BibleVerse.js";
 
-// Kaart voor accent-insensitief zoeken
+// Diacritics map
 const diacriticMap = {
   a: "[aàáâãäå]",
   e: "[eèéêë]",
@@ -12,7 +11,6 @@ const diacriticMap = {
   y: "[yýÿ]",
   c: "[cç]",
   n: "[nñ]",
-  // extra losse accenten
   ë: "[eèéêë]",
   ï: "[iìíîï]",
   ö: "[oòóôõö]",
@@ -24,16 +22,14 @@ const diacriticMap = {
   ú: "[uùúûü]"
 };
 
-// Bouw een regex die accenten negeert
+// Regex builder
 function wordRegex(word, mode = "exact") {
   const escaped = word
     .split("")
     .map((ch) => diacriticMap[ch.toLowerCase()] || ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("");
 
-  if (mode === "exact") {
-    return `\\b${escaped}\\b`;
-  }
+  if (mode === "exact") return `\\b${escaped}\\b`;
   return escaped;
 }
 
@@ -52,31 +48,28 @@ router.get("/", async (req, res) => {
   }
 
   try {
-    const words = q
-      .split(",")
-      .map((w) => w.trim())
-      .filter(Boolean);
-
+    const words = q.split(",").map((w) => w.trim()).filter(Boolean);
     if (words.length === 0) {
       return res.json({ version, mode, words: [], book, total: 0, results: [] });
     }
 
-    // Bouw OR-condities voor elk zoekwoord
+    // bouw OR-condities
     const orConditions = words.map((w) => {
       const pattern = wordRegex(w, mode);
       return { text: { $regex: new RegExp(pattern, "i") } };
     });
 
-    const conditions = { version, $or: orConditions };
+    // combineer alles in $and
+    const conditions = { $and: [{ version }, { $or: orConditions }] };
 
-    // Boekfilter case-insensitive exact
     if (book) {
-      conditions.book = { $regex: new RegExp(`^${book}$`, "i") };
+      conditions.$and.push({ book: { $regex: new RegExp(`^${book}$`, "i") } });
     }
 
     const results = await BibleVerse.find(conditions)
       .limit(limit)
-      .sort({ book: 1, chapter: 1, verse: 1 });
+      .sort({ book: 1, chapter: 1, verse: 1 })
+      .lean();
 
     res.json({
       version,
@@ -91,8 +84,8 @@ router.get("/", async (req, res) => {
         chapter: r.chapter,
         verse: r.verse,
         text: r.text,
-        ref: r.ref || `${r.book || "Onbekend"} ${r.chapter}:${r.verse}`,
-      })),
+        ref: r.ref || `${r.book || "Onbekend"} ${r.chapter}:${r.verse}`
+      }))
     });
   } catch (err) {
     console.error("❌ search error:", err);
