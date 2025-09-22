@@ -5,62 +5,154 @@ const router = Router();
 
 // -------- Helpers --------
 function systemMessage(mode) {
-  return `
-Je bent een Nederlandstalige assistent voor Bijbelstudie, Preek, Liederen en Actueel & Media.
-- Wees nauwkeurig, theologisch verantwoord, Christus-centraal en pastoraal.
-- Verwijs compact naar Schrift (bv. Rom. 8:1).
-- Geen verzonnen bronnen/urls. Bij externe verwijzingen: alleen echte, controleerbare info.
-`.trim();
+  switch(mode){
+    case "preek":
+      return "Je bent een Nederlandstalige predikant-assistent. Help om preekvoorbereiding theologisch verantwoord, Christus-centraal, pastoraal en praktisch te maken.";
+    case "liederen":
+      return "Je bent een Nederlandstalige muziek-assistent. Help bij het vinden van passende liederen bij bijbelgedeelten en thema's (Psalmen, Opwekking, Op Toonhoogte en andere).";
+    case "actueelmedia":
+      return "Je bent een Nederlandstalige assistent die nieuws en media verbindt met Bijbelstudie en preekvoorbereiding. Geef relevante artikelen, blogs, beelden en video's met compacte samenvatting en deeplinks.";
+    default:
+      return "Je bent een Nederlandstalige bijbelstudie-assistent. Help een groeps- of persoonlijke studie te maken die nauwkeurig, theologisch verantwoord en pastoraal is.";
+  }
 }
 
+/* -------- Prose (streaming) prompts per blok -------- */
 function prosePrompt(mode, context, extra = "") {
-  const label =
-    mode === "preek" ? "Preek" :
-    mode === "liederen" ? "Liederen" :
-    mode === "actueelmedia" ? "Actueel & Media" :
-    "Bijbelstudie";
+  switch(mode){
+    case "preek":
+      return `Schrijf een Nederlandse preekopzet met de volgende structuur:
+- Titel en korte inleiding
+- Driedelige hoofdlijnen (## Punt 1, ## Punt 2, ## Punt 3)
+- Achtergrond en verbanden (taalkundig, historisch, theologisch)
+- ## Speciaal voor de kinderen: eenvoudige uitleg of voorbeeld
+- Praktische toepassingen
+- Gebed
 
-  return `
-Schrijf in het Nederlands een goed leesbare ${label}-opzet op basis van de CONTEXT.
-- Begin met een korte analyse van de context.
-- Gebruik duidelijke kopjes (##), lijstjes (•) en compacte verwijzingen (Rom. 8:1).
-- Voeg toepassing en evt. gebedspunten toe.
-- GEEN JSON – alleen proza.
+Gebruik duidelijke kopjes, bullets en compacte verwijzingen naar Schrift (bv. Rom. 8:1).
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+EXTRA:
+${extra||"-"}`;
+
+    case "liederen":
+      return `Geef een overzicht van liederen die passen bij dit thema, in nette secties:
+## Psalmen
+- Nummer, titel, link naar tekst of uitvoering
+
+## Opwekking
+- Nummer, titel, link
+
+## Op Toonhoogte
+- Nummer, titel, link
+
+## Overige (klassiek/gospel/YouTube)
+- Titel, componist (indien bekend), link
 
 CONTEXT:
 ${JSON.stringify(context, null, 2)}
-
 EXTRA:
-${extra || "-"}
-`.trim();
+${extra||"-"}`;
+
+    case "actueelmedia":
+      return `Zoek en beschrijf actuele artikelen, christelijke blogs en media rond dit thema. 
+Voor elk item: geef 1–2 zinnen duiding en een directe deeplink.
+
+## Nieuws
+- Titel (bron) — samenvatting (1-2 zinnen). Link.
+
+## Media
+- Titel (YouTube/Wikimedia) — korte duiding. Link.
+
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+EXTRA:
+${extra||"-"}`;
+
+    default: // bijbelstudie
+      return `Schrijf een Nederlandse bijbelstudie-opzet met de volgende structuur:
+- Samenvatting context
+- ## Centrale gedeelten (2 stuks, schrijf de volledige tekst uit en geef reden waarom centraal)
+- Gespreksvragen (3-4)
+- Praktische toepassingen
+- Gebed
+
+Gebruik duidelijke kopjes, bullets en compacte verwijzingen naar Schrift (bv. Rom. 8:1).
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+EXTRA:
+${extra||"-"}`;
+  }
 }
 
+/* -------- JSON (compose) prompts per blok -------- */
 function jsonPrompt(mode, context, extra = "") {
-  return `
-Maak een rijk resultaat voor ${mode}. Output uitsluitend JSON volgens dit schema:
-
+  switch(mode){
+    case "preek":
+      return `Maak een JSON-resultaat voor een preekvoorbereiding. Houd je 100% aan dit schema, geen tekst buiten JSON:
 {
-  "type": "${mode}",
+  "type": "preek",
   "title": "string",
   "summary": "string",
-  "central_passages": [ { "ref": "Rom. 8:1-11", "reason": "..." } ],
-  "outline": ["kop 1", "kop 2"],
-  "background": ["historische notitie ..."],
-  "application": ["toepassing 1"],
+  "outline": ["punt1","punt2","punt3"],
+  "background": ["historische/taalkundige/theologische notities"],
+  "application": ["praktische toepassing"],
   "prayer": "gebedstekst",
-  "songs": [
-    { "title": "Tienduizend redenen", "source": "Opwekking 599", "url": "https://..." }
-  ],
-  "news": [],
-  "media": []
+  "children_block": "eenvoudige uitleg of voorbeeld voor kinderen",
+  "homiletical_tips": ["beeldspraak","retorische suggesties"]
 }
-
 CONTEXT:
 ${JSON.stringify(context, null, 2)}
-
 EXTRA:
-${extra || "-"}
-`.trim();
+${extra||"-"}`;
+
+    case "liederen":
+      return `Maak een JSON-resultaat voor passende liederen. Houd je 100% aan dit schema:
+{
+  "type": "liederen",
+  "songs": {
+    "psalms": [ { "number": 23, "title": "De HEER is mijn herder", "url": "https://..." } ],
+    "opwekking": [ { "number": 599, "title": "Tienduizend redenen", "url": "https://..." } ],
+    "op_toonhoogte": [ { "number": 123, "title": "Titel", "url": "https://..." } ],
+    "others": [ { "title": "Bach BWV 147", "composer": "Johann Sebastian Bach", "url": "https://..." } ]
+  }
+}
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+EXTRA:
+${extra||"-"}`;
+
+    case "actueelmedia":
+      return `Maak een JSON-resultaat voor actuele artikelen en media. Houd je 100% aan dit schema:
+{
+  "type": "actueelmedia",
+  "news": [ { "title": "Artikel", "url": "https://...", "source": "NOS", "summary": "1-2 zinnen samenvatting" } ],
+  "media": [ { "title": "YouTube video", "url": "https://...", "type": "video", "source": "YouTube" } ]
+}
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+EXTRA:
+${extra||"-"}`;
+
+    default: // bijbelstudie
+      return `Maak een JSON-resultaat voor een bijbelstudie. Houd je 100% aan dit schema:
+{
+  "type": "bijbelstudie",
+  "title": "string",
+  "summary": "string",
+  "central_passages": [
+    { "ref": "Rom. 8:1-11", "text": "VOLLEDIGE TEKST", "reason": "waarom centraal" },
+    { "ref": "Jes. 53:1-12", "text": "VOLLEDIGE TEKST", "reason": "waarom centraal" }
+  ],
+  "discussion": ["vraag1","vraag2","vraag3"],
+  "application": ["toepassing1","toepassing2"],
+  "prayer": "gebedstekst"
+}
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+EXTRA:
+${extra||"-"}`;
+  }
 }
 
 // -------- OpenRouter API --------
@@ -93,7 +185,6 @@ router.post("/compose", async (req, res) => {
     ];
     const r = await callOpenRouter({ messages, stream: false });
     const data = await r.json();
-    // Probeer message content te parsen
     const raw = data?.choices?.[0]?.message?.content || "";
     const parsed = (() => { try { return JSON.parse(raw); } catch { return null; } })();
     res.json(parsed || { error: "bad_json", raw });
@@ -122,7 +213,6 @@ router.post("/compose/stream", async (req, res) => {
       const { done, value } = await reader.read();
       if (done) break;
       const chunk = decoder.decode(value);
-      // Doorsturen zoals het komt
       res.write(chunk);
     }
     res.end();
@@ -130,7 +220,5 @@ router.post("/compose/stream", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
-// TODO: actueel & media endpoints blijven zoals je oude bestand (`/actueel-media`, `/actueel`, `/media`)
 
 export default router;
