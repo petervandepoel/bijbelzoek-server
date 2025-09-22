@@ -43,35 +43,18 @@ mongoose
 // ──────────────────────────────────────────────────────────────
 const escapeRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const DIA = {
-  a: "aàáâãäå",
-  e: "eèéêë",
-  i: "iìíîï",
-  o: "oòóôõö",
-  u: "uùúûü",
-  y: "yýÿ",
-  c: "cç",
-  n: "nñ",
-};
-
-function buildDiacriticPattern(s) {
-  return String(s)
-    .split("")
-    .map((ch) =>
-      DIA[ch.toLowerCase()] ? `[${DIA[ch.toLowerCase()]}]` : escapeRx(ch)
-    )
-    .join("");
+function normalizeWord(w) {
+  return w.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 function makeRegex(word, mode = "exact") {
-  const body = buildDiacriticPattern(word);
-
+  const base = normalizeWord(word);
   if (mode === "fuzzy") {
-    return new RegExp(body, "i");
+    // fuzzy: matcht ook vervoegingen zoals "Geloofd"
+    return new RegExp(base, "i");
   }
-
-  // exact mode: custom woordgrenzen (ook met accenten)
-  return new RegExp(`(^|[^A-Za-zÀ-ÿ])(${body})(?=$|[^A-Za-zÀ-ÿ])`, "i");
+  // exact: woordgrenzen
+  return new RegExp(`\\b${escapeRx(base)}\\b`, "i");
 }
 
 function toArr(x) {
@@ -84,10 +67,8 @@ function toArr(x) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Routes
+// /api/search
 // ──────────────────────────────────────────────────────────────
-
-// Zoekfunctie
 app.get("/api/search", async (req, res) => {
   try {
     const version = String(req.query.version || "HSV").toUpperCase();
@@ -117,22 +98,19 @@ app.get("/api/search", async (req, res) => {
     }
 
     // OR-condities voor woorden
-    const orConditions = words.map((w) => ({ text: makeRegex(w, mode) }));
+    const orConditions = words.map((w) => ({
+      text: makeRegex(w, mode),
+    }));
 
-    // $and filter: versie + woorden + optioneel boek
+    // Basisfilter met $and
     const filter = { $and: [{ version }, { $or: orConditions }] };
 
+    // Boekfilter (AND)
     if (books.length === 1) {
-      filter.$and.push({
-        book: { $regex: new RegExp(`^${buildDiacriticPattern(books[0])}$`, "i") },
-      });
+      filter.$and.push({ book: new RegExp(`^${escapeRx(books[0])}$`, "i") });
     } else if (books.length > 1) {
       filter.$and.push({
-        book: {
-          $in: books.map(
-            (b) => new RegExp(`^${buildDiacriticPattern(b)}$`, "i")
-          ),
-        },
+        book: { $in: books.map((b) => new RegExp(`^${escapeRx(b)}$`, "i")) },
       });
     }
 
@@ -172,7 +150,9 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────
 // Extra routes
+// ──────────────────────────────────────────────────────────────
 app.use("/api/chapter", chapterRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/export", exportRoutes);
