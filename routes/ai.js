@@ -3,54 +3,31 @@ import { Router } from "express";
 const router = Router();
 
 /* ===========================
-   Helpers & constants
+   Helpers
    =========================== */
 
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "gpt-4.1";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-function ensureHttps(url) {
-  if (!url) return "";
-  if (/^https?:\/\//i.test(url)) return url;
-  return "https://" + url.replace(/^\/+/, "");
-}
-
 function ytSearchLink(title) {
-  return `https://www.youtube.com/results?search_query=${encodeURIComponent(title || "")}`;
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(
+    title || ""
+  )}`;
 }
 
-function postProcessResult(mode, parsed) {
-  if (!parsed || typeof parsed !== "object") return parsed;
+function newsSearchLink(title, source) {
+  return `https://duckduckgo.com/?q=${encodeURIComponent(
+    title + " site:" + (source || "")
+  )}`;
+}
 
-  // Liederen: url fallback naar YouTube search
-  if (parsed.type === "liederen" && parsed.songs && typeof parsed.songs === "object") {
-    for (const key of Object.keys(parsed.songs)) {
-      const arr = parsed.songs[key];
-      if (Array.isArray(arr)) {
-        parsed.songs[key] = arr.map((song) => {
-          const s = { ...song };
-          if (!s.url && s.title) s.url = ytSearchLink(s.title);
-          if (s.url) s.url = ensureHttps(s.url);
-          return s;
-        });
-      }
-    }
+function isValidUrl(u) {
+  try {
+    const url = new URL(u);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
-
-  // Actueel & Media: normaliseer urls
-  if (parsed.type === "actueelmedia") {
-    if (Array.isArray(parsed.news)) {
-      parsed.news = parsed.news.map((n) => ({ ...n, url: ensureHttps(n.url) }));
-    }
-    if (Array.isArray(parsed.media)) {
-      parsed.media = parsed.media.map((m) => ({
-        ...m,
-        url: m.url ? ensureHttps(m.url) : ytSearchLink(m.title),
-      }));
-    }
-  }
-
-  return parsed;
 }
 
 function safeJsonParse(raw) {
@@ -61,7 +38,6 @@ function safeJsonParse(raw) {
   const fence = txt.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fence) txt = fence[1];
 
-  // probeer binnenste { ... } te pakken
   const s = txt.indexOf("{");
   const e = txt.lastIndexOf("}");
   if (s !== -1 && e !== -1 && e > s) {
@@ -75,122 +51,143 @@ function safeJsonParse(raw) {
   }
 }
 
+function postProcessResult(mode, parsed) {
+  if (!parsed || typeof parsed !== "object") return parsed;
+
+  if (parsed.type === "liederen" && parsed.songs) {
+    for (const cat of Object.keys(parsed.songs)) {
+      parsed.songs[cat] = parsed.songs[cat].map((song) => {
+        const title = song.title || "";
+        return { ...song, url: ytSearchLink(title) };
+      });
+    }
+  }
+
+  if (parsed.type === "actueelmedia") {
+    if (Array.isArray(parsed.news)) {
+      parsed.news = parsed.news.map((n) => ({
+        ...n,
+        url:
+          isValidUrl(n.url) && !/nos\.nl\/?$/i.test(n.url)
+            ? n.url
+            : newsSearchLink(n.title, n.source),
+      }));
+    }
+    if (Array.isArray(parsed.media)) {
+      parsed.media = parsed.media.map((m) => ({
+        ...m,
+        url: isValidUrl(m.url) ? m.url : ytSearchLink(m.title),
+      }));
+    }
+  }
+
+  return parsed;
+}
+
 /* ===========================
-   System messages (per mode)
+   System messages
    =========================== */
 
 function systemMessage(mode) {
   switch (mode) {
     case "preek":
-      return "Je bent een Nederlandstalige predikant-assistent die preekvoorbereiding levert met heldere structuur en theologische diepgang.";
+      return "Je bent een predikant-assistent. Geef een preekvoorbereiding in JSON en proza.";
     case "liederen":
-      return "Je bent een Nederlandstalige muziek-assistent die passende liederen vindt en linkt. Lever directe links; bij onbekend: YouTube-zoeklink.";
+      return "Je bent een muziek-assistent. Geef passende liederen, maar voeg geen fake links toe.";
     case "actueelmedia":
-      return "Je bent een Nederlandstalige nieuws- en media-assistent. Je levert compacte samenvattingen en echte deeplinks naar betrouwbare (christelijke) bronnen.";
+      return "Je bent een nieuws- en media-assistent. Geef nieuws en media met echte bronnen.";
     default:
-      return "Je bent een Nederlandstalige bijbelstudie-assistent die rijke, contextvolle studies schrijft met volledige tekstgedeelten, vragen, toepassing en gebed.";
+      return "Je bent een bijbelstudie-assistent. Geef rijke studies in JSON en proza.";
   }
 }
 
 /* ===========================
-   Streaming (proza) prompts
+   Prose prompts (stream)
    =========================== */
 
 function prosePrompt(mode, context, extra = "") {
-  // context kan 'version' bevatten (HSV/NKJV)
-  const versionNote =
-    typeof context === "string"
-      ? ""
-      : (context && context.includes?.("HSV")) ? "HSV"
-        : (context && context.includes?.("NKJV")) ? "NKJV"
-          : "";
-
   if (mode === "preek") {
     return `Schrijf een PREek in goed leesbaar Nederlands met duidelijke kopjes. 
-GEEN JSON, alleen proza. Gebruik "##" en "-" voor opsommingen.
+GEEN JSON, alleen proza.
 
 Structuur:
 ## Titel & Inleiding
-## Hoofdlijnen (3 punten, helder geformuleerd)
-## Achtergrond & Verbanden (taalkundig, historisch, theologisch)
-## Speciaal voor de kinderen (eenvoudige uitleg of voorbeeld)
+## Hoofdlijnen (3 punten)
+## Achtergrond & Verbanden
+## Speciaal voor de kinderen
 ## Toepassing
 ## Gebed
-## Homiletische tips (beeldspraak/retoriek)
+## Homiletische tips
 
-Context (samengevat):
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+Context:
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
   }
 
   if (mode === "liederen") {
-    return `Schrijf een beknopte toelichting en lijst vervolgens passende liederen bij dit thema. 
-GEEN JSON, alleen proza. Gebruik categorieën met "##" en opsommingen "-".
+    return `Schrijf een korte intro en lijst daarna passende liederen. 
+GEEN JSON, alleen proza.
 
 Structuur:
 ## Intro
 ## Psalmen
-- Titel (Nummer) — Link
+- Titel (Nummer)
 ## Opwekking
-- Titel (Nummer) — Link
+- Titel (Nummer)
 ## Op Toonhoogte
-- Titel (Nummer) — Link
+- Titel (Nummer)
 ## Overige
-- Titel — Link (klassiek/gospel/YouTube)
+- Titel (klassiek/gospel)
 
 Context:
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
   }
 
   if (mode === "actueelmedia") {
-    return `Schrijf een korte analyse en laat daarna lijstjes zien met Nieuws en Media. 
-GEEN JSON, alleen proza. Gebruik "##" kopjes en lijstjes met "-". Gebruik echte deeplinks (geen homepages).
+    return `Geef een analyse van relevant nieuws en media. 
+GEEN JSON, alleen proza.
 
 Structuur:
 ## Analyse
 ## Nieuws
-- Titel — (bron) — deeplink — 1–2 zinnen samenvatting
+- Titel — bron
 ## Media
-- Titel — (type/bron) — deeplink — 1 zin duiding
+- Titel — type/bron
 
 Context:
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
   }
 
-  // bijbelstudie (default)
+  // default: bijbelstudie
   return `Schrijf een BIJBELSTUDIE in goed leesbaar Nederlands.
-GEEN JSON, alleen proza. Gebruik "##" en "-" voor opsommingen.
-Indien mogelijk gebruik de gevraagde vertaling (${versionNote || "HSV of NKJV"}).
+GEEN JSON, alleen proza.
 
 Structuur:
-## Samenvatting & context
-## Centraal gedeelte 1 (volledige tekst) + uitleg waarom centraal
-## Centraal gedeelte 2 (volledige tekst) + uitleg waarom centraal
-## Vragen voor kringgesprek (3–5)
-## Toepassing (concreet)
-## Gebed (kort)
+## Samenvatting
+## Centraal gedeelte 1 (volledige tekst + uitleg)
+## Centraal gedeelte 2 (volledige tekst + uitleg)
+## Vragen
+## Toepassing
+## Gebed
 
 Context:
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
 }
 
 /* ===========================
-   JSON (compose) prompts
+   JSON prompts (compose)
    =========================== */
 
 function jsonPrompt(mode, context, extra = "") {
-  const baseHeader = `Geef ALLEEN geldige JSON, geen toelichting of tekst buiten JSON. Gebruik exact deze veldnamen.`;
+  const baseHeader =
+    "Geef ALLEEN geldige JSON. Geen uitleg erbuiten. Gebruik exact deze velden.";
 
   if (mode === "preek") {
     return `${baseHeader}
@@ -207,15 +204,8 @@ Schema:
   "homiletical_tips":["string"]
 }
 
-Vereisten:
-- "outline" bevat precies 3 korte, krachtige punten.
-- "background" bevat taalkundige/historische/theologische notities.
-- "children_block" is simpel en aansprekend.
-- "application" is concreet.
-
 Context:
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
   }
@@ -226,21 +216,18 @@ Schema:
 {
   "type":"liederen",
   "songs":{
-    "psalms":[{"number":23,"title":"De HEER is mijn Herder","url":"https://..."}],
-    "opwekking":[{"number":599,"title":"Tienduizend redenen","url":"https://..."}],
-    "op_toonhoogte":[{"number":321,"title":"Zegen ons Algoede","url":"https://..."}],
-    "others":[{"title":"How Great Thou Art","composer":"Stuart K. Hine","url":"https://..."}]
+    "psalms":[{"number":1,"title":"..."}],
+    "opwekking":[{"number":599,"title":"..."}],
+    "op_toonhoogte":[{"number":321,"title":"..."}],
+    "others":[{"title":"...","composer":"..."}]
   }
 }
 
-Vereisten:
-- Voeg voor elk lied een werkende url toe (liedtekstpagina of uitvoering).
-- Als geen url bekend is: genereer een geldige YouTube-zoeklink op basis van de titel.
-- Orden de liederen logisch bij het thema.
+⚠️ Voeg GEEN url’s toe; alleen titel/nummer/componist. 
+De server voegt automatisch YouTube-zoeklinks toe.
 
 Context:
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
   }
@@ -250,24 +237,20 @@ ${extra}`;
 Schema:
 {
   "type":"actueelmedia",
-  "news":[{"title":"...","url":"https://...","source":"NOS|NU.nl|EO|CIP|Refoweb|ND|RD","summary":"1–2 zinnen"}],
-  "media":[{"title":"...","url":"https://youtube.com/watch?v=...","type":"video|audio|image","source":"YouTube|Vimeo|Omroep|Podcast"}]
+  "news":[{"title":"...","source":"NOS|NU.nl|EO|CIP","summary":"1–2 zinnen"}],
+  "media":[{"title":"...","type":"video|audio|image","source":"YouTube|Vimeo|EO"}]
 }
 
-Vereisten:
-- Gebruik echte deeplinks (geen homepages). Bijvoorbeeld: "https://nos.nl/artikel/..." i.p.v. "https://nos.nl".
-- Bronnen bij voorkeur: NOS, NU.nl, EO, CIP, Refoweb, Nederlands Dagblad, Reformatorisch Dagblad, YouTube/Vimeo.
-- Geef bij ieder item een korte "summary" of "type".
-- Voeg 2–4 items toe per categorie als er voldoende relevant is.
+⚠️ Voeg GEEN url’s toe; alleen titel+source. 
+De server genereert zoeklinks of vult geldige urls in.
 
 Context:
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
   }
 
-  // bijbelstudie (default)
+  // default: bijbelstudie
   return `${baseHeader}
 Schema:
 {
@@ -275,22 +258,16 @@ Schema:
   "title":"string",
   "summary":"string",
   "central_passages":[
-    {"ref":"Boek Hoofdstuk:Vers-...","text":"VOLLEDIGE TEKST","reason":"waarom centraal"},
-    {"ref":"Boek Hoofdstuk:Vers-...","text":"VOLLEDIGE TEKST","reason":"waarom centraal"}
+    {"ref":"...","text":"VOLLEDIGE TEKST","reason":"..."},
+    {"ref":"...","text":"VOLLEDIGE TEKST","reason":"..."}
   ],
   "discussion":["vraag1","vraag2","vraag3"],
   "application":["toepassing1","toepassing2"],
-  "prayer":"korte gebedstekst"
+  "prayer":"string"
 }
 
-Vereisten:
-- Lever precies 2 centrale gedeelten met VOLLEDIGE tekst (HSV of NKJV volgens context).
-- "discussion" 3–5 vragen; "application" 2–4 concrete punten.
-- "prayer" kort en pastoraal.
-
 Context:
-${typeof context === "string" ? context : JSON.stringify(context, null, 2)}
-
+${JSON.stringify(context, null, 2)}
 Extra:
 ${extra}`;
 }
@@ -304,23 +281,14 @@ async function callOpenRouter({ messages, stream = false }) {
     throw new Error("Missing OPENROUTER_API_KEY");
   }
   const url = "https://openrouter.ai/api/v1/chat/completions";
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-    // Optioneel helpt dit voor OpenRouter usage attribution:
-    ...(process.env.SITE_URL ? { "HTTP-Referer": process.env.SITE_URL } : {}),
-    ...(process.env.SITE_NAME ? { "X-Title": process.env.SITE_NAME } : {}),
-  };
-  const body = {
-    model: OPENROUTER_MODEL,
-    stream,
-    messages,
-  };
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`OpenRouter HTTP ${res.status}: ${t.slice(0, 300)}`);
-  }
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+    },
+    body: JSON.stringify({ model: OPENROUTER_MODEL, stream, messages }),
+  });
   return res;
 }
 
@@ -328,7 +296,6 @@ async function callOpenRouter({ messages, stream = false }) {
    Routes
    =========================== */
 
-// JSON compose: altijd strikte JSON
 router.post("/compose", async (req, res) => {
   try {
     const { mode = "bijbelstudie", context = {}, extra = "" } = req.body || {};
@@ -336,24 +303,20 @@ router.post("/compose", async (req, res) => {
       { role: "system", content: systemMessage(mode) },
       { role: "user", content: jsonPrompt(mode, context, extra) },
     ];
-    const r = await callOpenRouter({ messages, stream: false });
+    const r = await callOpenRouter({ messages });
     const data = await r.json();
     const raw = data?.choices?.[0]?.message?.content || "";
 
     const parsed = safeJsonParse(raw);
     const finalJson = postProcessResult(mode, parsed);
 
-    if (finalJson) {
-      return res.json(finalJson);
-    }
-    // Fallback zodat AiResultCard iets kan tonen i.p.v. "dichtgeklapt"
+    if (finalJson) return res.json(finalJson);
     return res.json({ error: "bad_json", raw });
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Streaming: altijd proza (geen JSON)
 router.post("/compose/stream", async (req, res) => {
   try {
     const { mode = "bijbelstudie", context = {}, extra = "" } = req.body || {};
@@ -374,7 +337,6 @@ router.post("/compose/stream", async (req, res) => {
       const { done, value } = await reader.read();
       if (done) break;
       const chunk = decoder.decode(value).replace(/: ?OPENROUTER PROCESSING/gi, "");
-      // We sturen de chunks door zoals ze komen (OpenRouter geeft al SSE)
       res.write(chunk);
     }
     res.end();
