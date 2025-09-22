@@ -1,94 +1,136 @@
 // server/routes/ai.js
-import express from "express";
-//import fetch from "node-fetch";
-import { OpenAI } from "openai";
+import { Router } from "express";
 
-const router = express.Router();
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const router = Router();
 
-// Helper: format RSS/News entries
-async function fetchNews(query) {
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=nl&gl=NL&ceid=NL:nl`;
-  const res = await fetch(url);
-  const text = await res.text();
-  const matches = [...text.matchAll(/<item><title>(.*?)<\/title>.*?<link>(.*?)<\/link>/gs)];
-  return matches.slice(0,5).map(m => ({ title: m[1], url: m[2], source: new URL(m[2]).hostname }));
+// -------- Helpers --------
+function systemMessage(mode) {
+  return `
+Je bent een Nederlandstalige assistent voor Bijbelstudie, Preek, Liederen en Actueel & Media.
+- Wees nauwkeurig, theologisch verantwoord, Christus-centraal en pastoraal.
+- Verwijs compact naar Schrift (bv. Rom. 8:1).
+- Geen verzonnen bronnen/urls. Bij externe verwijzingen: alleen echte, controleerbare info.
+`.trim();
 }
 
-async function fetchMedia(query) {
-  // duckduckgo search as fallback (YouTube links)
-  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query + " site:youtube.com")}`;
-  const res = await fetch(url);
-  const html = await res.text();
-  const links = [...html.matchAll(/href="(https:\/\/www\.youtube\.com\/watch\?v=[^"]+)/g)]
-    .map(m => m[1]);
-  return [...new Set(links)].slice(0,5).map(l => ({ url: l, source: "youtube.com" }));
+function prosePrompt(mode, context, extra = "") {
+  const label =
+    mode === "preek" ? "Preek" :
+    mode === "liederen" ? "Liederen" :
+    mode === "actueelmedia" ? "Actueel & Media" :
+    "Bijbelstudie";
+
+  return `
+Schrijf in het Nederlands een goed leesbare ${label}-opzet op basis van de CONTEXT.
+- Begin met een korte analyse van de context.
+- Gebruik duidelijke kopjes (##), lijstjes (•) en compacte verwijzingen (Rom. 8:1).
+- Voeg toepassing en evt. gebedspunten toe.
+- GEEN JSON – alleen proza.
+
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+
+EXTRA:
+${extra || "-"}
+`.trim();
 }
 
-// Compose structured JSON (no stream)
-router.post("/compose", async (req,res) => {
-  try {
-    const { prompt } = req.body;
-    const completion = await client.chat.completions.create({
+function jsonPrompt(mode, context, extra = "") {
+  return `
+Maak een rijk resultaat voor ${mode}. Output uitsluitend JSON volgens dit schema:
+
+{
+  "type": "${mode}",
+  "title": "string",
+  "summary": "string",
+  "central_passages": [ { "ref": "Rom. 8:1-11", "reason": "..." } ],
+  "outline": ["kop 1", "kop 2"],
+  "background": ["historische notitie ..."],
+  "application": ["toepassing 1"],
+  "prayer": "gebedstekst",
+  "songs": [
+    { "title": "Tienduizend redenen", "source": "Opwekking 599", "url": "https://..." }
+  ],
+  "news": [],
+  "media": []
+}
+
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+
+EXTRA:
+${extra || "-"}
+`.trim();
+}
+
+// -------- OpenRouter API --------
+async function callOpenRouter({ messages, stream = false }) {
+  const url = "https://openrouter.ai/api/v1/chat/completions";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+    },
+    body: JSON.stringify({
       model: "gpt-4.1",
-      messages: [{ role:"system", content:"Je bent een bijbelstudie-assistent."},{ role:"user", content: prompt}],
-      response_format: { type: "json_object" }
-    });
-    res.json(JSON.parse(completion.choices[0].message.content));
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+      stream,
+      messages,
+    }),
+  });
+  return res;
+}
+
+// -------- Routes --------
+
+// Structured JSON
+router.post("/compose", async (req, res) => {
+  try {
+    const { mode = "bijbelstudie", context = {}, extra = "" } = req.body || {};
+    const messages = [
+      { role: "system", content: systemMessage(mode) },
+      { role: "user", content: jsonPrompt(mode, context, extra) }
+    ];
+    const r = await callOpenRouter({ messages, stream: false });
+    const data = await r.json();
+    // Probeer message content te parsen
+    const raw = data?.choices?.[0]?.message?.content || "";
+    const parsed = (() => { try { return JSON.parse(raw); } catch { return null; } })();
+    res.json(parsed || { error: "bad_json", raw });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Compose streaming prose (for live preview)
-router.post("/compose/stream", async (req,res) => {
+// Streaming proza
+router.post("/compose/stream", async (req, res) => {
   try {
-    const { prompt } = req.body;
-    const stream = await client.chat.completions.stream({
-      model: "gpt-4.1",
-      messages: [{ role:"system", content:"Schrijf leesbaar proza (geen JSON)."},
-                 { role:"user", content: prompt }],
-    });
+    const { mode = "bijbelstudie", context = {}, extra = "" } = req.body || {};
+    const messages = [
+      { role: "system", content: systemMessage(mode) },
+      { role: "user", content: prosePrompt(mode, context, extra) }
+    ];
+    const r = await callOpenRouter({ messages, stream: true });
 
-    res.setHeader("Content-Type","text/event-stream");
-    res.setHeader("Cache-Control","no-cache");
-    res.flushHeaders();
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.flushHeaders?.();
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if(content){
-        res.write(`data: ${JSON.stringify(content)}\n\n`);
-      }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value);
+      // Doorsturen zoals het komt
+      res.write(chunk);
     }
-    res.write("data: [DONE]\n\n");
     res.end();
-  } catch(err){
-    console.error(err);
-    res.status(500).json({ error: err.message });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// News deeplinks
-router.post("/actueel", async (req,res) => {
-  try{
-    const { query } = req.body;
-    const data = await fetchNews(query);
-    res.json({ items: data });
-  } catch(err){
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Media deeplinks
-router.post("/media", async (req,res) => {
-  try{
-    const { query } = req.body;
-    const data = await fetchMedia(query);
-    res.json({ items: data });
-  } catch(err){
-    res.status(500).json({ error: err.message });
-  }
-});
+// TODO: actueel & media endpoints blijven zoals je oude bestand (`/actueel-media`, `/actueel`, `/media`)
 
 export default router;
