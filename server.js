@@ -41,20 +41,31 @@ mongoose
 // ──────────────────────────────────────────────────────────────
 // Helpers voor zoekfunctie
 // ──────────────────────────────────────────────────────────────
+const DIA = {
+  a: "[aàáâãäå]",
+  e: "[eèéêë]",
+  i: "[iìíîï]",
+  o: "[oòóôõö]",
+  u: "[uùúûü]",
+};
+
 const escapeRx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function normalizeWord(w) {
   return w.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+function expandDiacritics(word) {
+  return word
+    .split("")
+    .map(ch => DIA[ch.toLowerCase()] || ch)
+    .join("");
+}
+
 function makeRegex(word, mode = "exact") {
-  const base = normalizeWord(word);
-  if (mode === "fuzzy") {
-    // fuzzy: matcht ook vervoegingen zoals "Geloofd"
-    return new RegExp(base, "i");
-  }
-  // exact: woordgrenzen
-  return new RegExp(`\\b${escapeRx(base)}\\b`, "i");
+  const pattern = expandDiacritics(word);
+  if (mode === "fuzzy") return new RegExp(pattern, "i");
+  return new RegExp(`\\b${pattern}\\b`, "i");
 }
 
 function toArr(x) {
