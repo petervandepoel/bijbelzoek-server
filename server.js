@@ -61,7 +61,6 @@ try {
 // Helpers bovenin server.js
 const escapeRx = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Basisletter → karakterklasse met accenten (bidirectioneel)
 const DIA = {
   a: "aàáâãäå",
   e: "eèéêë",
@@ -70,16 +69,25 @@ const DIA = {
   u: "uùúûü",
   y: "yýÿ",
   c: "cç",
-  n: "nñ",
+  n: "nñ"
 };
 
-const toArr = x => Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
+function toArr(x) {
+  return Array.isArray(x) ? x : String(x ?? "").split(",").map(s => s.trim()).filter(Boolean);
+}
+
+function buildDiacriticPattern(s) {
+  return String(s)
+    .split("")
+    .map(ch => DIA[ch.toLowerCase()] ? `[${DIA[ch.toLowerCase()]}]` : escapeRx(ch))
+    .join("");
+}
 
 function makeRegex(word, mode = "exact") {
   const body = buildDiacriticPattern(word);
   return mode === "exact"
-    ? new RegExp(`\\b${body}\\b`, "i")
-    : new RegExp(body, "i");
+    ? new RegExp(`\\b${body}\\b`, "i")   // exact: woordgrenzen
+    : new RegExp(body, "i");             // fuzzy: substring
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -88,25 +96,9 @@ app.get("/api/search", async (req, res) => {
     const version = String(req.query.version || "HSV").toUpperCase();
     const mode = String(req.query.mode || "or").toLowerCase();
 
-    // q -> words alias
     if (!req.query.words && req.query.q) req.query.words = req.query.q;
-
-    // woorden
-    let words = [];
-    if (typeof req.query.words === "string") {
-      words = req.query.words.split(",").map(w => w.trim()).filter(Boolean);
-    } else if (Array.isArray(req.query.words)) {
-      words = req.query.words.map(w => String(w).trim()).filter(Boolean);
-    }
-
-    // boek(en)
-    let books = [];
-    const rawBook = req.query.book ?? req.query.books;
-    if (typeof rawBook === "string") {
-      books = rawBook.split(",").map(b => b.trim()).filter(Boolean);
-    } else if (Array.isArray(rawBook)) {
-      books = rawBook.map(b => String(b).trim()).filter(Boolean);
-    }
+    const words = toArr(req.query.words);
+    const books = toArr(req.query.book ?? req.query.books);
 
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, parseInt(req.query.resultLimit || req.query.limit) || 20);
@@ -115,33 +107,24 @@ app.get("/api/search", async (req, res) => {
       return res.json({ version, mode, words: [], books, total: 0, page, resultLimit: limit, results: [] });
     }
 
-    // Tekst-deel van de query (default: OR + exact; fuzzy blijft fuzzy)
-    let textPart;
-    if (mode === "and") {
-      textPart = { $and: words.map(w => ({ text: makeRegex(w, "exact") })) };
-    } else if (mode === "fuzzy") {
-      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
-    } else {
-      // "exact" of onbekend => OR exact
-      textPart = { $or: words.map(w => ({ text: makeRegex(w, "exact") })) };
-    }
+    // OR-condities voor woorden
+    const orConditions = words.map(w => ({ text: makeRegex(w, mode) }));
 
-    // Basisfilter altijd via $and, zodat boekfilter gegarandeerd mee-werkt
-    const filter = { $and: [{ version }] };
-    if (textPart.$and) filter.$and.push(...textPart.$and);
-    if (textPart.$or)  filter.$and.push({ $or: textPart.$or });
+    // Basisfilter ALTIJD via $and
+    const filter = { $and: [{ version }, { $or: orConditions }] };
 
-    // Boekfilter: case-insensitive exact (ondersteunt meerdere boeken)
+    // Boekfilter als AND
     if (books.length === 1) {
-      filter.$and.push({ book: new RegExp(`^${escapeRx(books[0])}$`, "i") });
+      filter.$and.push({ book: { $regex: new RegExp(`^${buildDiacriticPattern(books[0])}$`, "i") } });
     } else if (books.length > 1) {
-      filter.$and.push({ book: { $in: books.map(b => new RegExp(`^${escapeRx(b)}$`, "i")) } });
+      filter.$and.push({
+        book: { $in: books.map(b => new RegExp(`^${buildDiacriticPattern(b)}$`, "i")) }
+      });
     }
 
-    // Query met expliciete projectie; zo hebben we altijd book/chapter/verse/text
     const [total, docs] = await Promise.all([
       Verse.countDocuments(filter),
-      Verse.find(filter, "book chapter verse text version") // 'ref' bouwen we zelf
+      Verse.find(filter, "book chapter verse text version")
         .sort({ book: 1, chapter: 1, verse: 1 })
         .skip((page - 1) * limit)
         .limit(limit)
@@ -152,8 +135,13 @@ app.get("/api/search", async (req, res) => {
       version, mode, words, books, total, page, resultLimit: limit,
       results: docs.map(v => {
         const book = v.book && v.book.trim() ? v.book : "Onbekend";
-        const ref  = `${book} ${v.chapter}:${v.verse}`;
-        return { ref, book, chapter: v.chapter, verse: v.verse, text: v.text };
+        return {
+          ref: `${book} ${v.chapter}:${v.verse}`,
+          book,
+          chapter: v.chapter,
+          verse: v.verse,
+          text: v.text
+        };
       })
     });
   } catch (e) {
