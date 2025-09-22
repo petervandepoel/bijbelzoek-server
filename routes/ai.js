@@ -4,35 +4,23 @@ import { callLLM, streamLLM } from "../services/provider.js";
 
 const router = Router();
 
-/** ───────────────────────────────────────────────────────────
- * Helpers
- * ─────────────────────────────────────────────────────────── */
+/** Helpers **/
 const isMode = (m) => ["bijbelstudie", "preek", "liederen"].includes((m || "").toLowerCase());
 const enc = (s) => encodeURIComponent(s || "");
 const joinQ = (theme, keywords = []) =>
   [theme || "", ...keywords].filter(Boolean).join(" ").trim();
 
-/** Parse JSON terug uit een LLM string (veilig, tolerant voor codeblokken) */
 function safeJsonParse(maybeJson) {
   if (!maybeJson) return null;
   let txt = String(maybeJson).trim();
-
-  // strip markdown fences
   const fence = txt.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fence) txt = fence[1];
-
-  // harden: neem grootste {...} blok
   const start = txt.indexOf("{");
   const end = txt.lastIndexOf("}");
   if (start !== -1 && end !== -1 && end > start) {
     txt = txt.slice(start, end + 1);
   }
-
-  try {
-    return JSON.parse(txt);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(txt); } catch { return null; }
 }
 
 function getSystem(mode) {
@@ -45,7 +33,6 @@ Je bent een Nederlandstalige assistent voor Bijbelstudie/Preek/Liederen (HSV/NKJ
 `.trim();
 }
 
-/** Schema-instructie voor consistente structured-output */
 function composePrompt({ mode, context = {}, extra = "" }) {
   return `
 Je taak: lees de CONTEXT, maak eerst een **contextanalyse**, en lever daarna uitgewerkte inhoud.
@@ -97,14 +84,10 @@ ${extra || "-"}
 `.trim();
 }
 
-/** ───────────────────────────────────────────────────────────
- * Health
- * ─────────────────────────────────────────────────────────── */
+/** Health **/
 router.get("/health", (req, res) => res.json({ ok: true }));
 
-/** ───────────────────────────────────────────────────────────
- * Compose (JSON)
- * ─────────────────────────────────────────────────────────── */
+/** Compose (JSON) **/
 router.post("/compose", async (req, res, next) => {
   try {
     let { mode = "bijbelstudie", context, extra = "" } = req.body || {};
@@ -132,9 +115,7 @@ router.post("/compose", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-/** ───────────────────────────────────────────────────────────
- * Streaming (optioneel)
- * ─────────────────────────────────────────────────────────── */
+/** Streaming (optioneel) **/
 router.post("/compose/stream", async (req, res) => {
   try {
     let { mode = "bijbelstudie", context, extra = "" } = req.body || {};
@@ -172,9 +153,7 @@ router.post("/compose/stream", async (req, res) => {
   }
 });
 
-/** ───────────────────────────────────────────────────────────
- * Actueel: klikbare zoek-links (geen API-key nodig)
- * ─────────────────────────────────────────────────────────── */
+/** Actueel: klikbare zoek-links **/
 router.post("/actueel", async (req, res) => {
   const { theme = "", keywords = [] } = req.body || {};
   const q = joinQ(theme, keywords);
@@ -192,9 +171,7 @@ router.post("/actueel", async (req, res) => {
   res.json({ theme: q, links });
 });
 
-/** ───────────────────────────────────────────────────────────
- * Media: beelden/filmpjes/kunst (klikbare zoek-links)
- * ─────────────────────────────────────────────────────────── */
+/** Media: beelden/kunst/filmpjes **/
 router.post("/media", async (req, res) => {
   const { theme = "", keywords = [] } = req.body || {};
   const q = joinQ(theme, keywords);
