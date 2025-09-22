@@ -5,21 +5,26 @@ const router = Router();
 function systemMessage(mode) {
   switch (mode) {
     case "preek":
-      return "Je bent een predikant-assistent. Geef een preekvoorbereiding in JSON, met duidelijke structuur.";
+      return "Je bent een predikant-assistent. Geef een preekvoorbereiding in JSON.";
     case "liederen":
-      return "Je bent een muziek-assistent. Geef passende liederen in JSON, met directe url's of YouTube zoeklinks.";
+      return "Je bent een muziek-assistent. Geef passende liederen in JSON.";
     case "actueelmedia":
-      return "Je bent een nieuws-assistent. Geef actuele artikelen en media in JSON, altijd met echte deeplinks (NOS, EO, CIP, YouTube).";
+      return "Je bent een nieuws-assistent. Geef actuele artikelen en media in JSON.";
     default:
-      return "Je bent een bijbelstudie-assistent. Geef een studie in JSON, met rijke inhoud en kopjes.";
+      return "Je bent een bijbelstudie-assistent. Geef een studie in JSON.";
   }
 }
 
 function prosePrompt(mode, context, extra = "") {
-  return `Schrijf een duidelijke ${mode} in goed leesbaar Nederlands, met kopjes en opsommingen.
+  return `Schrijf een duidelijke ${mode} in goed leesbaar Nederlands. 
+Gebruik kopjes (##), subkopjes (###) en opsommingen (-). 
+⚠️ Geef GEEN JSON, alleen leesbare tekst.
+
 Context:
 ${JSON.stringify(context, null, 2)}
-Extra: ${extra}`;
+
+Extra instructies:
+${extra}`;
 }
 
 function jsonPrompt(mode, context, extra = "") {
@@ -29,7 +34,7 @@ function jsonPrompt(mode, context, extra = "") {
   "type":"preek",
   "title":"string",
   "summary":"string",
-  "outline":["punt1","punt2","punt3"],
+  "outline":["punt1","punt2"],
   "background":["string"],
   "application":["string"],
   "prayer":"string",
@@ -57,17 +62,20 @@ function jsonPrompt(mode, context, extra = "") {
   "type":"bijbelstudie",
   "title":"string",
   "summary":"string",
+  "outline":[{"title":"...","content":["..."]}],
   "central_passages":[{"ref":"...","text":"VOLLEDIGE TEKST","reason":"..."}],
   "discussion":["string"],
   "application":["string"],
-  "prayer":"string",
-  "outline":[{"title":"...","content":["..."]}]
+  "prayer":"string"
 }`;
-  return `Geef ALLEEN geldige JSON volgens dit schema. Gebruik exact deze veldnamen.
-Als een url niet beschikbaar is, genereer een geldige YouTube zoeklink.
+  return `Geef ALLEEN geldige JSON volgens dit schema. Geen uitleg erbuiten.
 Schema: ${schema}
-Context: ${JSON.stringify(context, null, 2)}
-Extra: ${extra}`;
+
+Context:
+${JSON.stringify(context, null, 2)}
+
+Extra instructies:
+${extra}`;
 }
 
 async function callOpenRouter({ messages, stream = false }) {
@@ -93,13 +101,10 @@ router.post("/compose", async (req, res) => {
     const r = await callOpenRouter({ messages, stream: false });
     const data = await r.json();
     const raw = data?.choices?.[0]?.message?.content || "";
-    const parsed = (() => {
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return null;
-      }
-    })();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {}
     res.json(parsed || { error: "bad_json", raw });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -122,7 +127,9 @@ router.post("/compose/stream", async (req, res) => {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value).replace(/: ?OPENROUTER PROCESSING/gi, "");
+      const chunk = decoder
+        .decode(value)
+        .replace(/: ?OPENROUTER PROCESSING/gi, "");
       res.write(chunk);
     }
     res.end();
