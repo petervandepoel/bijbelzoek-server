@@ -7,17 +7,16 @@ const router = express.Router();
 
 router.get("/", async (req, res) => {
   const version = (req.query.version || "HSV").trim();
-  const q = (req.query.q || "").trim();
+  const q = (req.query.q || req.query.words || "").trim(); // support q= en words=
   const mode = (req.query.mode || "exact").toLowerCase(); // "exact" | "fuzzy"
   const book = (req.query.book || "").trim();
-  const limitRaw = Number.parseInt(req.query.limit || "50", 10);
+  const limitRaw = Number.parseInt(req.query.limit || req.query.resultLimit || "50", 10);
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 50;
   const debug = req.query.debug === "1";
 
   if (!q) return res.json({ results: [] });
 
   try {
-    // meerdere zoekwoorden toestaan, gescheiden door komma
     const words = q
       .split(",")
       .map((w) => w.trim())
@@ -25,14 +24,17 @@ router.get("/", async (req, res) => {
 
     if (words.length === 0) return res.json({ results: [] });
 
-    // Accent-ongevoelige regex per woord maken (via utils/diacritics.js)
+    // regex conditions per woord
     const orConditions = words.map((w) => {
-      const pattern = wordRegex(w, mode); // string pattern met veilige woordgrenzen en diacritics-mapping
-      return { text: { $regex: pattern, $options: "i" } }; // i = case-insensitive
+      const pattern = wordRegex(w, mode); 
+      return { text: { $regex: new RegExp(pattern, "i") } }; // echte RegExp
     });
 
     const conditions = { version, $or: orConditions };
-    if (book) conditions.book = book;
+
+    if (book) {
+      conditions.book = { $regex: new RegExp(`^${book}$`, "i") }; // case-insensitive exact
+    }
 
     if (debug) {
       console.log("🔎 SEARCH DEBUG");
@@ -46,11 +48,12 @@ router.get("/", async (req, res) => {
       .limit(limit)
       .sort({ chapter: 1, verse: 1 });
 
-    if (debug) {
-      console.log(" results count:", results.length);
-    }
-
     res.json({
+      version,
+      mode,
+      words,
+      book,
+      total: results.length,
       results: results.map((r) => ({
         _id: r._id,
         version: r.version,

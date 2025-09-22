@@ -101,16 +101,13 @@ app.get("/api/search", async (req, res) => {
     }
 
     // tekstfilter bouwen
-    let textPart;
-    if (mode === "and") {
-      textPart = { $and: words.map(w => ({ text: makeRegex(w, "exact") })) };
-    } else if (mode === "exact") {
-      textPart = { $or: words.map(w => ({ text: makeRegex(w, "exact") })) };
-    } else if (mode === "fuzzy") {
-      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
-    } else {
-      textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
-    }
+   let textPart;
+if (mode === "fuzzy") {
+  textPart = { $or: words.map(w => ({ text: makeRegex(w, "fuzzy") })) };
+} else {
+  // default = OR + Exact
+  textPart = { $or: words.map(w => ({ text: makeRegex(w, "exact") })) };
+}
 
     const filter = { version };
     if (textPart.$and) filter.$and = [{ version }, ...textPart.$and];
