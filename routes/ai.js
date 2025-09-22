@@ -175,7 +175,7 @@ router.post("/compose/stream", async (req, res) => {
   }
 });
 
-/** ======= ÉCHTE LINKS ======= **/
+/** ======= ÉCHTE LINKS (deeplinks, geen homepages) ======= **/
 const qEnc = (s) => encodeURIComponent(s || "");
 const fetchText = (url) => fetch(url, { headers: { "User-Agent": "bijbelzoek/1.0" }}).then(r => r.text());
 const fetchJSON = (url) => fetch(url, { headers: { "User-Agent": "bijbelzoek/1.0" }}).then(r => r.json());
@@ -194,7 +194,23 @@ async function getNewsLinks(query, limit = 6) {
     const link  = (block.match(/<link>(.*?)<\/link>/) || [])[1];
     if (title && link) items.push({ title, url: link, source: "News" });
   }
-  return items;
+  
+  // Normalize and de-duplicate, add source hostname
+  const seen = new Set();
+  const out = [];
+  for (const it of items) {
+    try {
+      const u = new URL(it.url);
+      const host = u.hostname.replace(/^www\./, "");
+      const key = u.origin + u.pathname;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ title: it.title, url: it.url, source: host });
+    } catch {
+      if (!seen.has(it.url)) { seen.add(it.url); out.push(it); }
+    }
+  }
+  return out.slice(0, limit);
 }
 
 // 2) YouTube watch-links via DuckDuckGo HTML + regex
