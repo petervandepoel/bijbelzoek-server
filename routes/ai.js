@@ -1,6 +1,6 @@
 // server/routes/ai.js
 import express from "express";
-import fetch from "node-fetch";
+//import fetch from "node-fetch";
 import { OpenAI } from "openai";
 
 const router = express.Router();
