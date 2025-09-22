@@ -1,7 +1,10 @@
+// server/routes/searchRoutes.js
 import express from "express";
 import BibleVerse from "../models/BibleVerse.js";
 
-// Diacritics map
+const router = express.Router();
+
+// Diacritics map: elke basisletter dekt ook varianten met accenten
 const diacriticMap = {
   a: "[aàáâãäå]",
   e: "[eèéêë]",
@@ -10,30 +13,23 @@ const diacriticMap = {
   u: "[uùúûü]",
   y: "[yýÿ]",
   c: "[cç]",
-  n: "[nñ]",
-  ë: "[eèéêë]",
-  ï: "[iìíîï]",
-  ö: "[oòóôõö]",
-  ü: "[uùúûü]",
-  á: "[aàáâãäå]",
-  é: "[eèéêë]",
-  í: "[iìíîï]",
-  ó: "[oòóôõö]",
-  ú: "[uùúûü]"
+  n: "[nñ]"
 };
 
-// Regex builder
+// Bouw regex die accenten negeert
 function wordRegex(word, mode = "exact") {
   const escaped = word
     .split("")
-    .map((ch) => diacriticMap[ch.toLowerCase()] || ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .map((ch) =>
+      diacriticMap[ch.toLowerCase()]
+        ? diacriticMap[ch.toLowerCase()]
+        : ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    )
     .join("");
 
   if (mode === "exact") return `\\b${escaped}\\b`;
   return escaped;
 }
-
-const router = express.Router();
 
 router.get("/", async (req, res) => {
   const version = (req.query.version || "HSV").trim();
@@ -53,20 +49,24 @@ router.get("/", async (req, res) => {
       return res.json({ version, mode, words: [], book, total: 0, results: [] });
     }
 
-    // bouw OR-condities
+    // OR-condities voor de woorden
     const orConditions = words.map((w) => {
       const pattern = wordRegex(w, mode);
       return { text: { $regex: new RegExp(pattern, "i") } };
     });
 
-    // combineer alles in $and
+    // Combineer in $and zodat boekfilter altijd meegaat
     const conditions = { $and: [{ version }, { $or: orConditions }] };
 
     if (book) {
       conditions.$and.push({ book: { $regex: new RegExp(`^${book}$`, "i") } });
     }
 
-    const results = await BibleVerse.find(conditions)
+    // Forceer projectie → altijd de velden die we willen
+    const results = await BibleVerse.find(
+      conditions,
+      "book chapter verse text ref version"
+    )
       .limit(limit)
       .sort({ book: 1, chapter: 1, verse: 1 })
       .lean();
