@@ -309,6 +309,9 @@ export function extractLinksFromMarkdown(md = "") {
   return out;
 }
 
+export default router; // <<< BELANGRIJK
+
+
 // ---- Example usage (in your React page/component) ---------------------------
 // const [output, setOutput] = useState("");
 // const ctrl = new AbortController();
