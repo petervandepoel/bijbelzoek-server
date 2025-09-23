@@ -268,7 +268,7 @@ async function streamFromOpenRouter({ block, userInput, onToken, signal }) {
  * Default: use OpenRouter directly when VITE_OPENROUTER_API_KEY is set; otherwise fall back to backend SSE.
  */
 export async function runAI({
-  block,               // 'BIJBELSTUDIE' | 'PREEK' | 'KUNST_LIED' | 'NIEUWS'
+  block,               // 'BIJBELSTUDIE' | 'PREEK' | 'KUNST_LIED' | 'NIEUWS'.
   userInput = {},      // { thema, passages:[], notities, grafiekObservaties, vertaling }
   onToken,             // (delta) => void
   signal,
