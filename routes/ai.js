@@ -19,6 +19,11 @@
 /** @typedef {import('react').ReactNode} ReactNode */
 
 // ---- Model catalog ----------------------------------------------------------
+
+import express from "express";
+const router = express.Router();
+
+
 export const MODELS = [
   {
     key: "anthropic/claude-3.5-sonnet",
@@ -309,8 +314,105 @@ export function extractLinksFromMarkdown(md = "") {
   return out;
 }
 
-export default router; // <<< BELANGRIJK
+router.post("/stream", async (req, res) => {
+  try {
+    const { model, messages } = req.body || {};
+    if (!model || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "model en messages zijn verplicht" });
+    }
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "OPENROUTER_API_KEY ontbreekt op de server" });
+    }
 
+    // Streaming headers (belangrijk op Render/NGINX)
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    // voorkom buffering door reverse proxies
+    res.setHeader("X-Accel-Buffering", "no");
+
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    // Stop provider-call als client disconnect
+    req.on("close", () => controller.abort());
+
+    // Vraag OpenRouter om SSE streaming
+    const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": process.env.PUBLIC_URL || "https://bijbelzoek.nl",
+        "X-Title": "Bijbelzoek.nl",
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+      }),
+      signal,
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      const text = await upstream.text().catch(() => "");
+      res.status(502).end(`Upstream error ${upstream.status}: ${text}`);
+      return;
+    }
+
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    // parse SSE en schrijf alléén de content-delta’s door
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE-chunks gescheiden door lege regel
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+
+      for (const part of parts) {
+        const lines = part.split("\n");
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") {
+            res.end();
+            return;
+          }
+          try {
+            const json = JSON.parse(payload);
+            const delta = json?.choices?.[0]?.delta?.content ?? "";
+            if (delta) {
+              res.write(delta);
+            }
+          } catch {
+            // keep-alives/heartbeat of non-JSON; negeren
+          }
+        }
+      }
+    }
+
+    res.end();
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      // client heeft verbinding gesloten: gewoon stoppen
+      return;
+    }
+    console.error("AI stream error:", err);
+    try {
+      res.status(500).end("AI stream error");
+    } catch {}
+  }
+});
+
+export default router;
 
 // ---- Example usage (in your React page/component) ---------------------------
 // const [output, setOutput] = useState("");
