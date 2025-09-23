@@ -1,65 +1,31 @@
-// ============================================================================
-// ai.js — Multi-model AI client with streaming for Bijbelzoek.nl
+
+// ai.js — Client-side AI helper (Front-end) for Bijbelzoek.nl
 // ----------------------------------------------------------------------------
-// Features
-// - Multiple AI models (OpenRouter-ready) with easy switching
-// - Strong prompt templates per blok: Bijbelstudie, Preek (outline-only),
-//   Kunst & Lied, Actueel & Nieuws
-// - Enforces: GEEN gebed, GEEN uitgeschreven preek
-// - Always starts with Contextanalyse (incl. grafiek/voorkomens-observaties)
-// - Markdown output (no JSON), perfect for streaming into AiResultCard
-// - Two transport options:
-//    1) Direct to OpenRouter (VITE_OPENROUTER_API_KEY in client)
-//    2) Via backend proxy at /api/ai/stream (recommended)
-// - Helper: extractLinksFromMarkdown for AiResultCard side panel
+// This version is aligned with the existing backend route:
+//   POST /api/ai/compose/stream  (SSE passthrough from OpenRouter)
+// It parses SSE and emits content tokens via onToken.
+//
+// Key changes vs. previous broken file:
+// - REMOVED any Express/server code from the client bundle
+// - Backend endpoint changed to /api/ai/compose/stream (to match server)
+// - Proper SSE parsing for backend streaming
+// - Block→mode mapping to match server modes: bijbelstudie | preek | liederen | actueelmedia
+// - Still supports direct OpenRouter (if VITE_OPENROUTER_API_KEY is set)
 // ============================================================================
 
 /* eslint-disable no-console */
 
-/** @typedef {import('react').ReactNode} ReactNode */
-
-// ---- Model catalog ----------------------------------------------------------
-
-import express from "express";
-const router = express.Router();
-
-
 export const MODELS = [
-  {
-    key: "anthropic/claude-3.5-sonnet",
-    label: "Claude 3.5 Sonnet (OpenRouter)",
-    vendor: "openrouter",
-    strengths: ["lange context", "pastorale toon", "analyse"],
-  },
-  {
-    key: "openai/gpt-4.1-mini",
-    label: "GPT-4.1 Mini (OpenRouter)",
-    vendor: "openrouter",
-    strengths: ["snel", "betaalbaar", "evenwichtig"],
-  },
-  {
-    key: "google/gemini-1.5-pro",
-    label: "Gemini 1.5 Pro (OpenRouter)",
-    vendor: "openrouter",
-    strengths: ["lange context", "structuur", "koppelingen"],
-  },
-  {
-    key: "mistral/mistral-large",
-    label: "Mistral Large (OpenRouter)",
-    vendor: "openrouter",
-    strengths: ["compact", "nuchter", "snel"],
-  },
-  {
-    key: "deepseek/deepseek-reasoner",
-    label: "DeepSeek Reasoner (OpenRouter)",
-    vendor: "openrouter",
-    strengths: ["diepe redenering", "analyse"],
-  },
+  { key: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet (OpenRouter)", vendor: "openrouter" },
+  { key: "openai/gpt-4.1-mini",         label: "GPT-4.1 Mini (OpenRouter)",      vendor: "openrouter" },
+  { key: "google/gemini-1.5-pro",       label: "Gemini 1.5 Pro (OpenRouter)",    vendor: "openrouter" },
+  { key: "mistral/mistral-large",       label: "Mistral Large (OpenRouter)",      vendor: "openrouter" },
+  { key: "deepseek/deepseek-reasoner",  label: "DeepSeek Reasoner (OpenRouter)",  vendor: "openrouter" },
 ];
 
 export const DEFAULT_MODEL_KEY = MODELS[0]?.key || "anthropic/claude-3.5-sonnet";
 
-// ---- Prompt scaffolding -----------------------------------------------------
+// ---- Prompt scaffolding for direct OpenRouter transport ---------------------
 const BASE_SYSTEM_PROMPT = `
 Je bent een academisch onderbouwde maar pastorale studie-assistent in een protestants/evangelische context voor Bijbelzoek.nl.
 BELANGRIJKE REGELS (must):
@@ -72,7 +38,6 @@ BELANGRIJKE REGELS (must):
 - Wees bronnenrijk en concreet; geen placeholders.
 `;
 
-// Headings shared across blocks — consistent UI in AiResultCard
 export const COMMON_SECTIONS = {
   CONTEXT: "## Contextanalyse (teksten + grafiek/voorkomens)",
   HANDVATTEN: "## Handvatten voor verdere uitwerking",
@@ -80,10 +45,6 @@ export const COMMON_SECTIONS = {
   SUGGESTIES: "## Suggesties voor verdieping (bronnen)",
 };
 
-/**
- * Templates per blok.
- * Vars per call: { thema, passages: string[], notities, grafiekObservaties, vertaling }
- */
 const PROMPT_TEMPLATES = {
   BIJBELSTUDIE: ({ thema, passages, notities, grafiekObservaties, vertaling }) => `
 # BIJBELSTUDIE — ${thema || "(thema niet opgegeven)"}
@@ -104,7 +65,7 @@ ${COMMON_SECTIONS.SUGGESTIES}
 
 **Niet opnemen:** gebed; uitgeschreven preek.
 
-**Aantekeningen gebruiker:** ${notities || "(geen)"}
+**Aantekeningen gebruiker:** ${notities || "(geen)"} 
 **Voorkeursvertaling:** ${vertaling || "HSV"}
 `,
 
@@ -130,7 +91,7 @@ ${COMMON_SECTIONS.SUGGESTIES}
 - 5–8 bronnen (boeken, artikelen, preekseries met transcript), met 1-regel waarom nuttig.
 
 **Niet opnemen:** gebed; uitgeschreven preek.
-**Aantekeningen gebruiker:** ${notities || "(geen)"}
+**Aantekeningen gebruiker:** ${notities || "(geen)"} 
 **Voorkeursvertaling:** ${vertaling || "HSV"}
 `,
 
@@ -139,7 +100,7 @@ ${COMMON_SECTIONS.SUGGESTIES}
 
 ${COMMON_SECTIONS.CONTEXT}
 - Welke emoties/thema's komen naar voren? Koppel dit aan de passages (${passages?.join(", ") || "n.v.t."}) en frequenties: ${grafiekObservaties || "(geen)"}.
-
+  
 ## Liedsuggesties (met motivatie)
 - Mix: Psalmen, Opwekking, Op Toonhoogte, hymnes. Per lied: functie (votum/aanbidding/overdenking/zegen), zeer korte kernregel (≤10 woorden), en waarom dit past.
 
@@ -175,14 +136,95 @@ ${COMMON_SECTIONS.SUGGESTIES}
 - 5–8 bronnen/portalen/nieuwsbrieven/podcasts met focus op kwaliteit en diversiteit.
 
 **Niet opnemen:** gebed; uitgeschreven preek.
-**Aantekeningen gebruiker:** ${notities || "(geen)"}
+**Aantekeningen gebruiker:** ${notities || "(geen)"} 
 `,
 };
 
-// ---- Streaming helpers ------------------------------------------------------
+// ---- Helpers to build OpenRouter messages (only for openrouter transport) ---
+export function buildMessages({ block, userInput = {} }) {
+  const tmpl = PROMPT_TEMPLATES[block];
+  if (!tmpl) throw new Error(`Onbekend blok: ${block}`);
+  const userPrompt = tmpl(userInput);
+  return [
+    { role: "system", content: BASE_SYSTEM_PROMPT },
+    { role: "user", content: userPrompt },
+  ];
+}
+
+// ---- Backend compose/stream (SSE) -------------------------------------------
+function blockToMode(block) {
+  switch (block) {
+    case "PREEK":
+      return "preek";
+    case "KUNST_LIED":
+      return "liederen";
+    case "NIEUWS":
+      return "actueelmedia";
+    case "BIJBELSTUDIE":
+    default:
+      return "bijbelstudie";
+  }
+}
+
+/**
+ * Stream from backend /api/ai/compose/stream (SSE passthrough).
+ * Body: { mode, context, extra }
+ */
+async function streamFromBackendCompose({ block, userInput, onToken, signal }) {
+  const mode = blockToMode(block);
+  const context = {
+    thema: userInput?.thema || null,
+    passages: userInput?.passages || null,
+    notities: userInput?.notities || null,
+    grafiekObservaties: userInput?.grafiekObservaties || null,
+    vertaling: userInput?.vertaling || null,
+  };
+
+  const urlBase = import.meta?.env?.VITE_API_BASE || "";
+  const res = await fetch(`${urlBase}/api/ai/compose/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode, context, extra: "" }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`Backend AI stream error: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE chunks => split by double newline
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() || "";
+    for (const chunk of chunks) {
+      const lines = chunk.split("\n").map((l) => l.trim());
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.replace(/^data:\s*/, "");
+        if (payload === "[DONE]") return;
+        try {
+          const json = JSON.parse(payload);
+          const delta = json?.choices?.[0]?.delta?.content ?? "";
+          if (delta && onToken) onToken(delta);
+        } catch {
+          // some providers send keep-alives or non-JSON lines
+        }
+      }
+    }
+  }
+}
+
+// ---- Direct OpenRouter streaming (client-side; only if api key is set) ------
 async function streamFromOpenRouter({ model, messages, onToken, signal }) {
   const apiKey = import.meta?.env?.VITE_OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("VITE_OPENROUTER_API_KEY ontbreekt (of gebruik backend /api/ai/stream)");
+  if (!apiKey) throw new Error("VITE_OPENROUTER_API_KEY ontbreekt (of gebruik backend /api/ai/compose/stream)");
 
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -192,14 +234,9 @@ async function streamFromOpenRouter({ model, messages, onToken, signal }) {
       "HTTP-Referer": (typeof window !== "undefined" && window.location?.origin) || "https://bijbelzoek.nl",
       "X-Title": "Bijbelzoek.nl",
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-    }),
+    body: JSON.stringify({ model, messages, stream: true }),
     signal,
   });
-
   if (!res.ok || !res.body) throw new Error(`OpenRouter fout: ${res.status} ${res.statusText}`);
 
   const reader = res.body.getReader();
@@ -211,11 +248,10 @@ async function streamFromOpenRouter({ model, messages, onToken, signal }) {
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    // SSE chunks separated by double newlines. Each line may start with "data:"
     const chunks = buffer.split("\n\n");
     buffer = chunks.pop() || "";
     for (const chunk of chunks) {
-      const lines = chunk.split("\n").map(l => l.trim());
+      const lines = chunk.split("\n").map((l) => l.trim());
       for (const line of lines) {
         if (!line.startsWith("data:")) continue;
         const payload = line.replace(/^data:\s*/, "");
@@ -224,68 +260,30 @@ async function streamFromOpenRouter({ model, messages, onToken, signal }) {
           const json = JSON.parse(payload);
           const delta = json?.choices?.[0]?.delta?.content ?? "";
           if (delta && onToken) onToken(delta);
-        } catch {
-          // ignore keep-alives
-        }
+        } catch {}
       }
     }
   }
 }
 
-async function streamFromBackend({ model, messages, onToken, signal }) {
-  const res = await fetch("/api/ai/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages }),
-    signal,
-  });
-  if (!res.ok || !res.body) throw new Error(`Backend AI stream error: ${res.status}`);
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    const text = decoder.decode(value, { stream: true });
-    if (onToken) onToken(text);
-  }
-}
-
 // ---- Public API -------------------------------------------------------------
-export function buildMessages({ block, userInput = {} }) {
-  const tmpl = PROMPT_TEMPLATES[block];
-  if (!tmpl) throw new Error(`Onbekend blok: ${block}`);
-  const userPrompt = tmpl(userInput);
-  return [
-    { role: "system", content: BASE_SYSTEM_PROMPT },
-    { role: "user", content: userPrompt },
-  ];
-}
-
 /**
- * Run AI with streaming
- * @param {Object} params
- * @param {'BIJBELSTUDIE'|'PREEK'|'KUNST_LIED'|'NIEUWS'} params.block
- * @param {Object} params.userInput
- * @param {string} [params.modelKey]
- * @param {(delta:string)=>void} [params.onToken]
- * @param {AbortSignal} [params.signal]
- * @param {'openrouter'|'backend'} [params.transport]
+ * Run AI with streaming.
+ * By default uses backend compose/stream. If VITE_OPENROUTER_API_KEY is set, you can pass transport='openrouter'.
  */
 export async function runAI({
-  block,
-  userInput,
+  block,               // 'BIJBELSTUDIE' | 'PREEK' | 'KUNST_LIED' | 'NIEUWS'
+  userInput = {},      // { thema, passages:[], notities, grafiekObservaties, vertaling }
   modelKey = DEFAULT_MODEL_KEY,
-  onToken,
+  onToken,             // (delta) => void
   signal,
   transport = import.meta?.env?.VITE_OPENROUTER_API_KEY ? "openrouter" : "backend",
 }) {
-  const messages = buildMessages({ block, userInput });
-
   if (transport === "openrouter") {
+    const messages = buildMessages({ block, userInput });
     await streamFromOpenRouter({ model: modelKey, messages, onToken, signal });
   } else {
-    await streamFromBackend({ model: modelKey, messages, onToken, signal });
+    await streamFromBackendCompose({ block, userInput, onToken, signal });
   }
 }
 
@@ -314,124 +312,6 @@ export function extractLinksFromMarkdown(md = "") {
   return out;
 }
 
-router.post("/stream", async (req, res) => {
-  try {
-    const { model, messages } = req.body || {};
-    if (!model || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "model en messages zijn verplicht" });
-    }
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ error: "OPENROUTER_API_KEY ontbreekt op de server" });
-    }
-
-    // Streaming headers (belangrijk op Render/NGINX)
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    // voorkom buffering door reverse proxies
-    res.setHeader("X-Accel-Buffering", "no");
-
-    const controller = new AbortController();
-    const { signal } = controller;
-
-    // Stop provider-call als client disconnect
-    req.on("close", () => controller.abort());
-
-    // Vraag OpenRouter om SSE streaming
-    const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "HTTP-Referer": process.env.PUBLIC_URL || "https://bijbelzoek.nl",
-        "X-Title": "Bijbelzoek.nl",
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-      }),
-      signal,
-    });
-
-    if (!upstream.ok || !upstream.body) {
-      const text = await upstream.text().catch(() => "");
-      res.status(502).end(`Upstream error ${upstream.status}: ${text}`);
-      return;
-    }
-
-    const reader = upstream.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    // parse SSE en schrijf alléén de content-delta’s door
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      // SSE-chunks gescheiden door lege regel
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop() || "";
-
-      for (const part of parts) {
-        const lines = part.split("\n");
-        for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (payload === "[DONE]") {
-            res.end();
-            return;
-          }
-          try {
-            const json = JSON.parse(payload);
-            const delta = json?.choices?.[0]?.delta?.content ?? "";
-            if (delta) {
-              res.write(delta);
-            }
-          } catch {
-            // keep-alives/heartbeat of non-JSON; negeren
-          }
-        }
-      }
-    }
-
-    res.end();
-  } catch (err) {
-    if (err?.name === "AbortError") {
-      // client heeft verbinding gesloten: gewoon stoppen
-      return;
-    }
-    console.error("AI stream error:", err);
-    try {
-      res.status(500).end("AI stream error");
-    } catch {}
-  }
-});
-
-export default router;
-
-// ---- Example usage (in your React page/component) ---------------------------
-// const [output, setOutput] = useState("");
-// const ctrl = new AbortController();
-// await runAI({
-//   block: BLOCKS.BIJBELSTUDIE,
-//   userInput: {
-//     thema: "Hoop in lijden",
-//     passages: ["Romeinen 5:1-11", "1 Petrus 1"],
-//     grafiekObservaties: "Piek in Romeinen en 1 Petrus; weinig in historische boeken",
-//     notities: "kring van gemengde leeftijd",
-//     vertaling: "HSV",
-//   },
-//   modelKey: DEFAULT_MODEL_KEY,
-//   onToken: (t) => setOutput((s) => s + t),
-//   signal: ctrl.signal,
-// });
-
-
 // ============================================================================
-// END OF ai.js
+// END OF ai.js (client-side)
 // ============================================================================
