@@ -169,6 +169,8 @@ app.use("/api/chapter", chapterRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/export", exportRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api", aiRoutes);        // alias: /api/compose & /api/compose/stream
+
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/feedback", feedbackRoutes);
 
@@ -196,7 +198,9 @@ app.get("/api/debug/smoke", async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // Start server
 // ──────────────────────────────────────────────────────────────
+
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`🚀 Server draait op poort ${PORT}`);
 });

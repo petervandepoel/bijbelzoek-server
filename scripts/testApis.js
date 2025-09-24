@@ -1,6 +1,4 @@
 // server/scripts/testApis.js
-import fetch from "node-fetch";
-
 const BASE = process.env.API_BASE || "http://localhost:5000";
 
 async function test(name, url, options) {

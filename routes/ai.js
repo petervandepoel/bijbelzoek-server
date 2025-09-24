@@ -6,9 +6,6 @@ const router = Router();
    Helpers
    =========================== */
 
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "gpt-4.1";
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-
 function ytSearchLink(title) {
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(
     title || ""
@@ -276,25 +273,31 @@ ${extra}`;
    OpenRouter call
    =========================== */
 
-async function callOpenRouter({ messages, stream = false }) {
-  if (!OPENROUTER_API_KEY) {
-    throw new Error("Missing OPENROUTER_API_KEY");
-  }
-  const url = "https://openrouter.ai/api/v1/chat/completions";
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
+ async function callOpenRouter({ messages, stream = false }) {
+  const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+  const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "gpt-4.1";
+  const OPENROUTER_API_BASE_URL = process.env.OPENROUTER_API_BASE_URL || "https://openrouter.ai/api/v1";
+  const OPENROUTER_REFERER = process.env.OPENROUTER_REFERER || "http://localhost:5173";
+  const OPENROUTER_TITLE = process.env.OPENROUTER_TITLE || "Bijbelzoek Local";
+  if (!OPENROUTER_API_KEY) throw new Error("Missing OPENROUTER_API_KEY");
+  const url = `${OPENROUTER_API_BASE_URL}/chat/completions`;
+   const res = await fetch(url, {
+     method: "POST",
+     headers: {
+       "Content-Type": "application/json",
       Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-    },
-    body: JSON.stringify({ model: OPENROUTER_MODEL, stream, messages }),
-  });
-  return res;
-}
+      "HTTP-Referer": OPENROUTER_REFERER,
+      "X-Title": OPENROUTER_TITLE,
+     },
+     body: JSON.stringify({ model: OPENROUTER_MODEL, stream, messages }),
+   });
+   return res;
+ }
 
 /* ===========================
    Routes
    =========================== */
+router.get("/compose/health", (_req, res) => res.json({ ok: true }));
 
 router.post("/compose", async (req, res) => {
   try {
