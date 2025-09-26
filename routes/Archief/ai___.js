@@ -1,3 +1,4 @@
+// server/routes/ai.js
 import { Router } from "express";
 const router = Router();
 
@@ -86,17 +87,17 @@ function postProcessResult(mode, parsed) {
 
 function systemMessage(mode) {
   const base =
-    "Schrijf in helder Nederlands met je/jij. Toon: breed interkerkelijk; zorgvuldig en feitelijk. Gebruik HSV als standaard. Bij contextverwijzingen: schrijf Schriftverwijzingen voluit en geef verzen volledig (HSV) weer waar gevraagd. Input-gewichten: 1) Algemene notities (meest bepalend, incl. vragen/observaties onder teksten/grafieken), 2) 📊 Grafieken/zoekwoorden, 3) ⭐ Favoriete teksten. Als Algemene notities, 📊 Grafieken én ⭐ Favoriete teksten allemaal ontbreken: leg kort uit welke input nodig is en STOP (geen JSON toevoegen).";
+    "Schrijf in helder Nederlands met je/jij. Toon: breed interkerkelijk; strikt met bronnen (liever kort dan speculeren). Gebruik HSV als standaard. Citeer Schriftverwijzingen voluit en schrijf de verzen uit in HSV. Contextprioriteit: 1) Algemene notities (belangrijkst), 2) 📊 Grafieken (zoekwoorden), 3) ⭐ Favoriete teksten. Respecteer Metadata (Bijbelversie, Zoekmodus). Lengte-indicatie voor proza: ~600–900 woorden. Als Algemene notities, 📊 Grafieken én ⭐ Favoriete teksten allemaal ontbreken: genereer geen inhoud; leg kort uit welke input nodig is en stop.";
 
   switch (mode) {
     case "preek":
-      return base + " Jij bent een predikant-assistent. Lever rijke, praktische en theologisch zorgvuldige inhoud met relevante kruisverwijzingen, context en historische notities.";
+      return base + " Jij bent een predikant-assistent voor een traditionele gemeente. Lever pastorale, praktische en theologisch zorgvuldige inhoud met rijke maar relevante kruisverwijzingen.";
     case "liederen":
       return base + " Jij bent een muziek-/liturgie-assistent; je suggereert passende liederen per bundel met korte motivatie per lied. Geen directe URL’s.";
     case "actueelmedia":
-      return base + " Jij bent een nieuws- en media-assistent; breng recente ontwikkelingen, onderzoeken en hoogwaardige bronnen rond het thema in kaart met korte, feitelijke duiding; gebruik bron+titel en veilige zoekopdrachten i.p.v. directe URL’s.";
+      return base + " Jij bent een nieuws- en media-assistent; duid recente ontwikkelingen en media rond het thema met nuance én duidelijke kern; gebruik bron+titel en veilige zoekopdrachten in plaats van directe URL’s.";
     default:
-      return base + " Jij bent een bijbelstudie-assistent; maak een compacte maar rijke studie met centrale gedeelten (inclusief kernzinnen), contextduiding, studie- en gespreksvragen.";
+      return base + " Jij bent een bijbelstudie-assistent; maak een compacte maar rijke studie met centrale gedeelten, hoofdlijnen en toepassing.";
   }
 }
 
@@ -107,35 +108,27 @@ function systemMessage(mode) {
 
 function prosePrompt(mode, context, extra = "") {
   const common =
-    "Verwerk expliciet: (1) Algemene notities (belangrijkst, incl. vragen/observaties onder teksten en grafieken), (2) 📊 Grafieken/zoekwoorden, (3) ⭐ Favoriete teksten. Gebruik HSV; schrijf bijbelteksten volledig uit bij de ‘Centrale gedeelten’. Schrijf compact maar inhoudelijk. Als alle genoemde context-secties ontbreken: schrijf één korte melding dat er meer input nodig is en STOP — voeg dan GEEN JSON toe.";
+    "Gebruik de aangeleverde Context (Markdown/JSON) actief. Verwerk expliciet: (1) Algemene notities (belangrijkst), (2) 📊 Grafieken (zoekwoorden), (3) ⭐ Favoriete teksten. Gebruik HSV; schrijf bijbelteksten altijd volledig uit bij verwijzingen. Schrijf compact maar inhoudelijk. Als alle genoemde context-secties ontbreken: schrijf één korte melding dat er meer input nodig is en STOP — voeg dan GEEN JSON toe.";
 
   if (mode === "preek") {
     return `Schrijf een preekvoorbereiding (traditionele gemeente).
 GEEN JSON bovenin; alleen proza met exact deze koppen (voor de UI):
 
-## Contextanalyse / Introductie
-## Centrale gedeelten (met kernzinnen)
-- <Ref 1 (HSV) — VOLLEDIGE TEKST>
-  Kernzinnen: "<…>", "<…>"
-  Uitleg: …
-- <Ref 2 (HSV) — VOLLEDIGE TEKST> (optioneel)
-  Kernzinnen: "<…>", "<…>"
-  Uitleg: …
+## Contextanalyse
 ## Titel & Inleiding
-## Hoofdlijnen (2–5 punten)
+## Hoofdlijnen (3 punten)
 - Punt 1 — + 1 illustratie
 - Punt 2 — + 1 illustratie
-- Punt 3 — + 1 illustratie (optioneel 4–5)
-## Achtergrond & Verbanden (incl. historische context)
-## Belangrijke plaatsen / personen (indien van toepassing)
+- Punt 3 — + 1 illustratie
+## Achtergrond & Verbanden
 ## Speciaal voor de kinderen (alleen indien de context daarom vraagt)
 ## Toepassing
 ## Homiletische tips
 
 Richtlijnen:
-- Rijke maar relevante kruisverwijzingen; schrijf bijbelteksten volledig uit (HSV) bij ‘Centrale gedeelten’.
-- Toon: breed interkerkelijk; strikt met feiten (liever kort dan speculeren).
-- Lengte: ~800–1100 woorden.
+- Rijke maar relevante kruisverwijzingen; schrijf bijbelteksten volledig uit (HSV).
+- Toon: breed interkerkelijk; strikt met bronnen (liever kort dan speculeren).
+- Lengte: ~600–900 woorden.
 - Geen gebed opnemen.
 - Ná het proza: voeg EENMALIG een geldige \`\`\`json codefence\`\`\` toe met kaartdata volgens schema hieronder.
 
@@ -154,16 +147,11 @@ Voeg ONDERAAN toe als \`\`\`json\`\`\`:
   "title":"<korte titel>",
   "summary":"<2–4 zinnen samenvatting>",
   "outline":[
-    {"kop":"Contextanalyse / Introductie","inhoud":["…","…"]},
-    {"kop":"Hoofdlijnen","opsomming":["Punt 1","Punt 2","Punt 3"]},
+    {"kop":"Hoofdlijnen (3 punten)","opsomming":["Punt 1","Punt 2","Punt 3"]},
     {"kop":"Achtergrond & Verbanden","inhoud":["…","…"]},
     {"kop":"Toepassing","inhoud":["…","…"]}
   ],
-  "central_passages":[
-    {"ref":"Boek X:Y-Z","text":"VOLLEDIGE HSV-tekst","key_phrases":["…","…"],"reason":"waarom centraal"}
-  ],
   "background":["contextpunt","historische of tekstuele notitie"],
-  "places_people":["naam of plaats + 1 regel duiding"],
   "children_block":"<alleen opnemen indien van toepassing, anders weglaten>",
   "homiletical_tips":["Korte alinea met 3–5 zinnen als één item"],
   "application":["toepassing 1","toepassing 2"]
@@ -224,16 +212,16 @@ GEEN JSON bovenin; alleen proza met deze koppen:
 
 ## Analyse
 ## Nieuws
-- <Titel> — <Bron> (datum indien recent): <1–2 zinnen samenvatting + 1 weetje/cijfer>
+- <Titel> — <Bron> (datum indien recent): <1–2 zinnen samenvatting>
 ## Media
 - <Titel> — <type/bron>: <1–2 zinnen waarom relevant>
 
 Richtlijnen:
 - 8–12 items totaal (nieuws + media samen).
-- Geef voorkeur aan onderzoeken, rapporten, peilingen, trend-analyses en achtergrondstukken.
-- Gebruik bron+titel en veilige zoekopdrachten i.p.v. directe URL’s:
+- Gebruik bron+titel en veilige zoekopdrachten in plaats van directe URL’s:
   - Nieuws: https://duckduckgo.com/?q=<Titel> site:<Bron>
   - Media: https://www.youtube.com/results?search_query=<Titel>
+- Koppeling met thema/teksten per item is optioneel; nuance + duidelijke kern.
 - Datum alleen tonen als het recent is.
 - Ná het proza: voeg EENMALIG een \`\`\`json\`\`\`-blok toe.
 
@@ -252,10 +240,10 @@ Voeg ONDERAAN toe als \`\`\`json\`\`\`:
   "title":"Actueel & Media bij <thema>",
   "summary":"<2–4 zinnen duiding>",
   "news":[
-    {"title":"…","source":"NOS|NU.nl|EO|CIP|Reformatorisch Dagblad|Trouw|ND","summary":"1–2 zinnen + 1 weetje","date":"<optioneel>","url":"https://duckduckgo.com/?q=<titel>%20site:<bron>"}
+    {"title":"…","source":"NOS|NU.nl|EO|CIP|Reformatorisch Dagblad","summary":"1–2 zinnen","date":"<optioneel>","url":"https://duckduckgo.com/?q=<titel>%20site:<bron>"}
   ],
   "media":[
-    {"title":"…","type":"video|audio|image","source":"YouTube|EO|Vimeo|Podcast","url":"https://www.youtube.com/results?search_query=<titel>"}
+    {"title":"…","type":"video|audio|image","source":"YouTube|EO|Vimeo","url":"https://www.youtube.com/results?search_query=<titel>"}
   ]
 }`;
   }
@@ -264,27 +252,23 @@ Voeg ONDERAAN toe als \`\`\`json\`\`\`:
   return `Schrijf een compacte maar rijke bijbelstudie.
 GEEN JSON bovenin; alleen proza met exact deze koppen:
 
-## Contextanalyse / Introductie
-## Centrale gedeelten (met kernzinnen)
+## Contextanalyse
+## Titel & Inleiding
+## Centrale gedeelten
 - <Ref 1 (HSV) — VOLLEDIGE TEKST>
-  Kernzinnen: "<…>", "<…>"
   Uitleg: …
 - <Ref 2 (HSV) — VOLLEDIGE TEKST> (optioneel)
-  Kernzinnen: "<…>", "<…>"
   Uitleg: …
 - <Ref 3 (HSV) — VOLLEDIGE TEKST> (optioneel)
-  Kernzinnen: "<…>", "<…>"
   Uitleg: …
 ## Hoofdlijnen (3 punten)
 - …
 - …
 - …
-## Duiding van context (achtergrond & verbanden)
-## Studievragen (terug de Bijbel in)
-- …
-## Gespreksvragen (5–10)
-- …
+## Achtergrond & Verbanden
 ## Toepassing
+## Gespreksvragen (5–7)
+- …
 
 Richtlijnen:
 - Aantal centrale gedeelten flexibel (1–3), met volledige HSV-tekst.
@@ -308,17 +292,15 @@ Voeg ONDERAAN toe als \`\`\`json\`\`\`:
   "title":"<korte titel>",
   "summary":"<2–4 zinnen samenvatting>",
   "outline":[
-    {"kop":"Contextanalyse / Introductie","inhoud":["…","…"]},
+    {"kop":"Contextanalyse","inhoud":["…","…"]},
     {"kop":"Hoofdlijnen (3 punten)","opsomming":["…","…","…"]},
-    {"kop":"Duiding van context","inhoud":["…","…"]},
+    {"kop":"Achtergrond & Verbanden","inhoud":["…","…"]},
     {"kop":"Toepassing","inhoud":["…","…"]}
   ],
   "central_passages":[
-    {"ref":"Boek X:Y-Z","text":"VOLLEDIGE HSV-tekst","key_phrases":["…","…"],"reason":"waarom centraal"}
+    {"ref":"Boek X:Y-Z","text":"VOLLEDIGE HSV-tekst","reason":"waarom centraal"}
   ],
-  "study_questions":["vraag 1","vraag 2","vraag 3","vraag 4","vraag 5"],
-  "conversation_questions":["vraag 1","vraag 2","vraag 3","vraag 4","vraag 5","vraag 6","vraag 7"],
-  "application":["toepassing 1","toepassing 2"]
+  "discussion":["vraag 1","vraag 2","vraag 3","vraag 4","vraag 5"]
 }`;
 }
 
@@ -329,7 +311,7 @@ Voeg ONDERAAN toe als \`\`\`json\`\`\`:
 
 function jsonPrompt(mode, context, extra = "") {
   const baseHeader =
-    "Geef ALLEEN geldige JSON. Geen uitleg erbuiten. Gebruik exact deze velden. Gebruik HSV en schrijf bijbelverzen volledig uit waar van toepassing. Respecteer: 1) Algemene notities, 2) 📊 Grafieken (zoekwoorden), 3) ⭐ Favoriete teksten. Als alle contextsecties ontbreken: geef JSON met {\"error\":\"no_context\",\"message\":\"Meer input nodig\"}.";
+    "Geef ALLEEN geldige JSON. Geen uitleg erbuiten. Gebruik exact deze velden. Gebruik HSV en schrijf bijbelverzen volledig uit waar van toepassing. Respecteer: 1) Algemene notities, 2) 📊 Grafieken, 3) ⭐ Favoriete teksten. Als alle contextsecties ontbreken: geef JSON met {\"error\":\"no_context\",\"message\":\"Meer input nodig\"}.";
 
   if (mode === "preek") {
     return `${baseHeader}
@@ -339,14 +321,11 @@ Schema:
   "title":"string",
   "summary":"string",
   "outline":[
-    {"kop":"Contextanalyse / Introductie","inhoud":["…","…"]},
-    {"kop":"Hoofdlijnen","opsomming":["Punt 1","Punt 2","Punt 3"]},
+    {"kop":"Hoofdlijnen (3 punten)","opsomming":["Punt 1","Punt 2","Punt 3"]},
     {"kop":"Achtergrond & Verbanden","inhoud":["…","…"]},
     {"kop":"Toepassing","inhoud":["…","…"]}
   ],
-  "central_passages":[{"ref":"string","text":"VOLLEDIGE HSV-tekst","key_phrases":["…"],"reason":"string"}],
   "background":["string"],
-  "places_people":["string"],
   "children_block":"string (optioneel)",
   "homiletical_tips":["één item met korte alinea als string"],
   "application":["string"]
@@ -408,15 +387,13 @@ Schema:
   "title":"string",
   "summary":"string",
   "outline":[
-    {"kop":"Contextanalyse / Introductie","inhoud":["…","…"]},
+    {"kop":"Contextanalyse","inhoud":["…","…"]},
     {"kop":"Hoofdlijnen (3 punten)","opsomming":["…","…","…"]},
-    {"kop":"Duiding van context","inhoud":["…","…"]},
+    {"kop":"Achtergrond & Verbanden","inhoud":["…","…"]},
     {"kop":"Toepassing","inhoud":["…","…"]}
   ],
-  "central_passages":[{"ref":"string","text":"VOLLEDIGE HSV-tekst","key_phrases":["…"],"reason":"string"}],
-  "study_questions":["string"],
-  "conversation_questions":["string"],
-  "application":["string"]
+  "central_passages":[{"ref":"string","text":"VOLLEDIGE HSV-tekst","reason":"string"}],
+  "discussion":["string"]
 }
 
 Context:
@@ -432,7 +409,7 @@ ${extra}`;
 
  async function callOpenRouter({ messages, stream = false }) {
   const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-  const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "anthropic/claude-3.5-sonnet";
+  const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "gpt-4.1";
   const OPENROUTER_API_BASE_URL = process.env.OPENROUTER_API_BASE_URL || "https://openrouter.ai/api/v1";
   const OPENROUTER_REFERER = process.env.OPENROUTER_REFERER || "http://localhost:5173";
   const OPENROUTER_TITLE = process.env.OPENROUTER_TITLE || "Bijbelzoek Local";

@@ -13,11 +13,15 @@ import exportRoutes from "./routes/export.js";
 import aiRoutes from "./routes/ai.js";
 import analyticsRoutes from "./routes/analytics.js";
 import feedbackRoutes from "./routes/feedback.js";
+import bodyParser from "body-parser";
+
 
 dotenv.config();
 const app = express();
 
 app.use(express.json({ limit: "2mb" }));
+app.use(bodyParser.json({ limit: "10mb" }));
+
 app.use(cors({ origin: true, credentials: true }));
 app.options("*", cors());
 app.use(helmet());
