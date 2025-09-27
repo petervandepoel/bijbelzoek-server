@@ -12,8 +12,9 @@ import statsRoutes from "./routes/statsRoutes.js";
 import exportRoutes from "./routes/export.js";
 import aiRoutes from "./routes/ai.js";
 import analyticsRoutes from "./routes/analytics.js";
-import feedbackRoutes from "./routes/feedback.js";
 import bodyParser from "body-parser";
+import feedbackRouter from "./routes/feedback.js";
+
 
 
 dotenv.config();
@@ -176,7 +177,7 @@ app.use("/api/ai", aiRoutes);
 app.use("/api", aiRoutes);        // alias: /api/compose & /api/compose/stream
 
 app.use("/api/analytics", analyticsRoutes);
-app.use("/api/feedback", feedbackRoutes);
+app.use("/api/feedback", feedbackRouter);
 
 // Health check
 app.get("/healthz", (req, res) => {

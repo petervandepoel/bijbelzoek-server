@@ -4,41 +4,74 @@ import Feedback from "../models/Feedback.js";
 
 const router = express.Router();
 
-// GET /api/feedback -> laatste 100 items, nieuw eerst
-router.get("/", async (_req, res) => {
-  const items = await Feedback.find().sort({ createdAt: -1 }).limit(100).lean();
-  res.json({ items });
-});
-
-// POST /api/feedback -> bericht opslaan
+/**
+ * POST /api/feedback
+ * Sla nieuwe feedback op in MongoDB
+ */
 router.post("/", async (req, res) => {
   try {
-    const rawName = (req.body?.name ?? "Anoniem").toString();
-    const rawMsg = (req.body?.message ?? "").toString();
+    const { name, email, subject, message } = req.body;
 
-    const name = rawName.trim().slice(0, 50) || "Anoniem";
-    const message = rawMsg.trim();
+    if (!message) {
+      return res.status(400).json({ success: false, error: "Bericht is verplicht" });
+    }
 
-    if (!message) return res.status(400).json({ error: "message is required" });
-    if (message.length > 500) return res.status(400).json({ error: "max 500 chars" });
+    // IP hash berekenen
+    const ip =
+      req.headers["x-forwarded-for"] || req.connection.remoteAddress || "";
+    const ipHash = crypto.createHash("sha256").update(ip).digest("hex");
+    const userAgent = req.headers["user-agent"] || "";
 
-    // Basic spam/rate hulp: hash van IP, bewaar user-agent
-    const ip = (req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "").toString();
-    const ipHash = ip ? crypto.createHash("sha256").update(ip).digest("hex") : "";
-    const userAgent = (req.headers["user-agent"] || "").toString().slice(0, 255);
+    const fb = new Feedback({
+      name: name || "Anoniem",
+      email, // alleen zichtbaar voor beheerder
+      subject: subject || "feedback",
+      message,
+      ipHash,
+      userAgent,
+    });
 
-    const item = await Feedback.create({ name, message, ipHash, userAgent });
+    await fb.save();
+    res.json({ success: true, id: fb._id });
+  } catch (err) {
+    console.error("Feedback save error:", err);
+    res.status(500).json({ success: false, error: "Server error" });
+  }
+});
+
+/**
+ * GET /api/feedback?page=1
+ * Haal feedback op (max 5 per pagina)
+ */
+router.get("/", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 5;
+    const skip = (page - 1) * limit;
+
+    const feedbacks = await Feedback.find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const count = await Feedback.countDocuments();
 
     res.json({
-      item: {
-        _id: item._id,
-        name: item.name,
-        message: item.message,
-        createdAt: item.createdAt,
-      },
+      data: feedbacks.map((f) => ({
+        id: f._id,
+        name: f.name,
+        subject: f.subject,
+        message: f.message,
+        createdAt: f.createdAt,
+        // ⚠️ email niet meesturen, alleen in DB zichtbaar
+      })),
+      total: count,
+      page,
+      pages: Math.ceil(count / limit),
     });
-  } catch (e) {
-    res.status(500).json({ error: "failed" });
+  } catch (err) {
+    console.error("Feedback fetch error:", err);
+    res.status(500).json({ success: false, error: "Server error" });
   }
 });
 

@@ -1,13 +1,17 @@
 import mongoose from "mongoose";
 
-const FeedbackSchema = new mongoose.Schema(
-  {
-    name: { type: String, default: "Anoniem", maxlength: 50 },
-    message: { type: String, required: true, maxlength: 500 },
-    ipHash: { type: String, default: "" },
-    userAgent: { type: String, default: "" },
+const feedbackSchema = new mongoose.Schema({
+  name: { type: String, default: "Anoniem" },
+  email: { type: String }, // optioneel, alleen zichtbaar voor beheerder
+  subject: {
+    type: String,
+    enum: ["feedback", "gewoon een berichtje", "bug", "new feature", "overig"],
+    default: "feedback",
   },
-  { timestamps: { createdAt: true, updatedAt: false } }
-);
+  message: { type: String, required: true },
+  ipHash: { type: String },
+  userAgent: { type: String },
+  createdAt: { type: Date, default: Date.now },
+});
 
-export default mongoose.model("Feedback", FeedbackSchema);
+export default mongoose.model("Feedback", feedbackSchema);
